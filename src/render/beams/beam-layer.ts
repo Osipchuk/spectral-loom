@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { RayTree } from '../../optics/types';
 import type { TableFrame } from '../frame';
 import { buildBeamGeometry, type BeamGeometryOptions } from './beam-geometry';
-import { createBeamMaterial } from './beam-material';
+import { createBeamMaterial, createSharedUniforms } from './beam-material';
 
 interface BeamSet {
   beam: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
@@ -21,6 +21,8 @@ export class BeamLayer {
   readonly group = new THREE.Group();
   private current: BeamSet | null = null;
   private fading: BeamSet[] = [];
+  /** Clock and pulse uniforms shared by every beam material (live and fading). */
+  readonly shared = createSharedUniforms();
 
   constructor(private frame: TableFrame) {}
 
@@ -37,8 +39,8 @@ export class BeamLayer {
       this.current.fade = { from: g, to: 0, t0: now, duration: TOGGLE_FADE };
       this.fading.push(this.current);
     }
-    const beam = new THREE.Mesh(geo, createBeamMaterial('beam'));
-    const spill = new THREE.Mesh(geo, createBeamMaterial('spill'));
+    const beam = new THREE.Mesh(geo, createBeamMaterial('beam', this.shared));
+    const spill = new THREE.Mesh(geo, createBeamMaterial('spill', this.shared));
     for (const m of [beam, spill]) {
       m.frustumCulled = false;
       this.group.add(m);

@@ -14,7 +14,10 @@ import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
 import type { Loom, SceneModel } from './scene/types';
 import { planNotes, type NoteTemplate } from './timing/arrivals';
+import { BeatClock } from './timing/clock';
 import { pulseSources, SUBDIVISION_BEATS, type PulseSource } from './timing/sources';
+import { channelPulses, ENV_SLOTS, layoutVisuals, type VisualLayout } from './timing/visual';
+import { PulseTexture } from './render/beams/pulse-texture';
 import { h } from './ui/dom';
 import { Interaction } from './ui/interaction';
 import { Panels } from './ui/panels';
@@ -54,6 +57,12 @@ export class App {
   private frames = { count: 0, t0: performance.now() };
   private demoId: string | null;
   private tmpColor = new THREE.Color();
+  private visual: VisualLayout = { channels: [], segments: new Map() };
+  private pulseTexture = new PulseTexture();
+  /** Longest light travel time in the scene, seconds: how far back pulses stay visible. */
+  private maxDelayS = 0;
+  /** Silent clock that animates light before audio is started. */
+  private previewClock: BeatClock;
 
   constructor(host: HTMLElement, opts: AppOptions) {
     this.store = new SceneStore(opts.scene);
@@ -65,6 +74,14 @@ export class App {
     host.append(this.root);
 
     this.renderer = new Renderer(this.canvas, this.store.scene);
+    this.previewClock = new BeatClock(opts.scene.settings.bpm);
+    this.previewClock.anchor(performance.now() / 1000, 0);
+    const shared = this.renderer.beams.shared;
+    shared.uPulses!.value = this.pulseTexture.texture;
+    ENV_SLOTS.forEach((slot, i) => {
+      const e = slot === 'neutral' ? { attack: 0.08, decay: 0.6, sustain: 0, release: 1.2 } : ENVELOPES[slot];
+      (shared.uEnv!.value as THREE.Vector4[])[i]!.set(Math.max(0.04, e.attack), Math.max(0.02, e.decay / 3), e.sustain, Math.max(0.02, e.release / 4));
+    });
     this.interaction = new Interaction(this.root, this.canvas, this.renderer, this.store, () => {});
     this.panels = new Panels(this.store, {
       onPaletteDown: (kind, e) => this.interaction.beginPlace(kind, e, e.currentTarget as HTMLElement),
@@ -171,6 +188,7 @@ export class App {
     if (kinds.has('settings') || kinds.has('load')) {
       const s = this.store.scene.settings;
       if (s.bpm !== this.engine.clock.bpm) this.engine.setBpm(s.bpm);
+      if (s.bpm !== this.previewClock.bpm) this.previewClock.setBpm(s.bpm, performance.now() / 1000);
       this.engine.setMasterDb(s.masterDb);
     }
     if (kinds.has('selection') || kinds.has('load') || kinds.has('toggle')) {
@@ -206,7 +224,17 @@ export class App {
     this.sources = pulseSources(scene);
     this.engine.setPlan(this.plan, this.sources);
     this.cardLayout = this.computeCardLayout(this.tree);
-    this.renderer.setTree(this.tree, now, this.dirty.crossfade);
+    this.visual = layoutVisuals(scene, this.tree, this.plan, scene.settings.bpm);
+    if (this.pulseTexture.ensureRows(this.visual.channels.length)) {
+      this.renderer.beams.shared.uPulses!.value = this.pulseTexture.texture;
+    }
+    const cs = (scene.settings.c * scene.settings.bpm) / 60;
+    this.maxDelayS = 0;
+    for (const g of this.tree.segments) {
+      const w = this.visual.segments.get(g.id)?.warp ?? 0;
+      this.maxDelayS = Math.max(this.maxDelayS, (g.sStart + g.length - g.pulseOriginS) / cs + Math.max(0, w));
+    }
+    this.renderer.setTree(this.tree, now, this.dirty.crossfade, this.visual);
   }
 
   private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
@@ -250,8 +278,10 @@ export class App {
       this.dirty.crossfade = false;
     }
 
-    const heard = this.engine.ready ? this.engine.heardTime() : wall;
-    const beat = this.engine.playing ? this.engine.clock.beatAt(heard) : null;
+    const live = this.engine.ready;
+    const heard = live ? this.engine.heardTime() : wall;
+    const beat = this.engine.playing ? this.engine.clock.beatAt(heard) : live ? null : this.previewClock.beatAt(wall);
+    this.updateLight(heard, live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
 
@@ -265,6 +295,30 @@ export class App {
     this.schedule();
   };
 
+  /**
+   * Upload the pulses that can still be visible somewhere on a beam: launched within the
+   * longest travel time plus a release tail. Visuals are a pure function of (ray tree,
+   * pulse schedule, audio time); nothing here reacts to note events.
+   */
+  private updateLight(time: number, clock: BeatClock | null): void {
+    const shared = this.renderer.beams.shared;
+    const s = this.store.scene.settings;
+    shared.uAudioTime!.value = time;
+    shared.uLightSpeed!.value = (s.c * s.bpm) / 60;
+    if (!clock) {
+      shared.uPulsesOn!.value = 0;
+      return;
+    }
+    shared.uPulsesOn!.value = 1;
+    const from = time - this.maxDelayS - 6;
+    const to = time + 0.05;
+    const rows = this.visual.channels.map((ch) => {
+      const src = this.sources.get(ch.sourceId);
+      return src ? channelPulses(ch, src, clock, from, to) : [];
+    });
+    this.pulseTexture.write(rows);
+  }
+
   /** Receptor slits glow with their notes; modulator rings and loom cards follow the beat. */
   private updateInstruments(heard: number, beat: number | null): void {
     const level = new Map<string, number>();
@@ -272,6 +326,9 @@ export class App {
       const v = envelopeAt(ENVELOPES[n.instrument], n.holdS, heard - n.time) * n.velocity;
       if (v > 0) level.set(n.receptorId, (level.get(n.receptorId) ?? 0) + v);
     }
+    let energy = 0;
+    for (const v of level.values()) energy += v;
+    this.renderer.energy = Math.min(1, energy * 0.5);
     for (const el of this.store.scene.elements) {
       const view = this.renderer.views.get(el.id);
       if (!view) continue;
@@ -366,6 +423,7 @@ export class App {
     this.root.removeEventListener('keydown', this.onKey);
     this.interaction.dispose();
     this.engine.dispose();
+    this.pulseTexture.dispose();
     this.renderer.dispose();
     this.root.remove();
   }

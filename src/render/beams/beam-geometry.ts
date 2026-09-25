@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { RaySegment, RayTree } from '../../optics/types';
 import { lineDistance } from '../../optics/vec2';
 import { lightToRGB } from '../spectral-color';
+import type { VisualLayout } from '../../timing/visual';
 import { BEAM_HEIGHT, type TableFrame } from '../frame';
 
 /** Reference width that maps intensity 1 to radiance 1. */
@@ -36,8 +37,8 @@ function fanSpread(tree: RayTree): Map<number, [number, number]> {
 }
 
 export interface BeamGeometryOptions {
-  /** Maps a pulse source id to its row in the pulse texture (used from M3 on). */
-  sourceIndex?: (id: string) => number;
+  /** Which pulse channel, envelope and quantization warp each segment uses. */
+  visual?: VisualLayout;
 }
 
 /**
@@ -56,6 +57,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
   const color = new Float32Array(n * 4 * 3);
   const params = new Float32Array(n * 4 * 4);
   const pulse = new Float32Array(n * 4 * 4);
+  const env = new Float32Array(n * 4);
   const index = new Uint32Array(n * 6);
 
   segs.forEach((g, i) => {
@@ -74,7 +76,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
     // Quad half-extent covers the soft halo, which is proportional to width plus a fixed glow.
     const extent = wMax * 2.6 + 0.3;
     const rgb = lightToRGB(g.light);
-    const src = opts.sourceIndex ? opts.sourceIndex(g.pulseSourceId) : 0;
+    const vis = opts.visual?.segments.get(g.id) ?? { channel: -1, warp: 0, env: 0 };
 
     for (let v = 0; v < 4; v++) {
       const k = i * 4 + v;
@@ -87,7 +89,8 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
       width.set([g.width, g.widthRate, sp0 * fanFill, sp1 * fanFill], k * 4);
       color.set(rgb, k * 3);
       params.set([g.intensity, g.length, extent, g.audible ? 1 : 0], k * 4);
-      pulse.set([g.sStart, g.pulseOriginS, src, g.bounces], k * 4);
+      pulse.set([g.sStart, g.pulseOriginS, vis.channel, vis.warp], k * 4);
+      env[k] = vis.env;
     }
     const o = i * 4;
     index.set([o, o + 1, o + 2, o + 2, o + 1, o + 3], i * 6);
@@ -101,6 +104,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
   geo.setAttribute('aColor', new THREE.BufferAttribute(color, 3));
   geo.setAttribute('aParams', new THREE.BufferAttribute(params, 4));
   geo.setAttribute('aPulse', new THREE.BufferAttribute(pulse, 4));
+  geo.setAttribute('aEnv', new THREE.BufferAttribute(env, 1));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   return geo;
 }

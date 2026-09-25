@@ -7,6 +7,8 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { RayTree } from '../optics/types';
 import type { SceneModel } from '../scene/types';
+import type { VisualLayout } from '../timing/visual';
+import { Atmosphere } from './atmosphere';
 import { BeamLayer } from './beams/beam-layer';
 import { ElementViews } from './elements/element-views';
 import { Materials } from './elements/materials';
@@ -57,12 +59,13 @@ export const CAMERA_LIMITS = { azimuth: 0.42, polarMin: 0.42, polarMax: 0.86 };
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 500);
+  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 600);
   readonly frame: TableFrame;
   readonly beams: BeamLayer;
   readonly glows: Glows;
   readonly views: ElementViews;
   readonly gizmo: Gizmo;
+  readonly atmosphere: Atmosphere;
   readonly angles: CameraAngles = { azimuth: 0, polar: 0.66 };
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
@@ -96,7 +99,7 @@ export class Renderer {
     pmrem.dispose();
     this.scene.environment = this.envTarget.texture;
     this.scene.environmentIntensity = 0.6;
-    this.scene.background = new THREE.Color(0x020203);
+    this.scene.background = null;
 
     this.scene.add(new THREE.HemisphereLight(0x8a96b8, 0x0a0a0c, 0.6));
     const key = new THREE.DirectionalLight(0xfff1e0, 1.5);
@@ -119,7 +122,8 @@ export class Renderer {
     this.beams = new BeamLayer(this.frame);
     this.glows = new Glows(this.frame);
     this.gizmo = new Gizmo(this.frame);
-    this.scene.add(this.table.group, this.views.group, this.beams.group, this.glows.group, this.gizmo.group);
+    this.atmosphere = new Atmosphere(this.frame);
+    this.scene.add(this.atmosphere.group, this.table.group, this.views.group, this.beams.group, this.glows.group, this.gizmo.group);
 
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
@@ -199,19 +203,25 @@ export class Renderer {
     this.views.sync(scene.elements);
   }
 
-  setTree(tree: RayTree, now: number, crossfade: boolean, sourceIndex?: (id: string) => number): void {
-    this.beams.setTree(tree, now, crossfade, { sourceIndex });
+  setTree(tree: RayTree, now: number, crossfade: boolean, visual?: VisualLayout): void {
+    this.beams.setTree(tree, now, crossfade, { visual });
     this.glows.setTree(tree);
+    this.atmosphere.setTree(tree);
   }
+
+  /** Musical energy 0…1 for the room to breathe with. */
+  energy = 0;
 
   render(time: number, now: number): void {
     this.beams.update(time, now);
+    this.atmosphere.update(time, this.pixelRatio, this.energy, this.size.x / Math.max(1, this.size.y), new THREE.Vector2(this.angles.azimuth, this.angles.polar - 0.66));
     this.finish.uniforms.uTime!.value = time;
     this.composer.render();
   }
 
   dispose(): void {
     this.beams.dispose();
+    this.atmosphere.dispose();
     this.glows.dispose();
     this.views.dispose();
     this.gizmo.dispose();

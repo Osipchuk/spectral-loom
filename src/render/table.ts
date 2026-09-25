@@ -106,14 +106,7 @@ export class Table {
       this.disposables.push(rim.geometry);
     }
 
-    // Floor far below, so the void around the table is not pure black.
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 1 });
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -6;
-    this.group.add(floor);
-
-    this.disposables.push(map, rough, topMat, top.geometry, rimMat, floorMat, floor.geometry);
+    this.disposables.push(map, rough, topMat, top.geometry, rimMat);
   }
 
   dispose(): void {

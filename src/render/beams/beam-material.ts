@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PULSES_PER_CHANNEL } from '../../timing/visual';
 import { BASE_WIDTH, MIN_WIDTH } from './beam-geometry';
 
 // Ashima/Stefan Gustavson 3D simplex noise (MIT).
@@ -34,7 +35,9 @@ attribute vec4 aWidth;
 attribute vec3 aColor;
 attribute vec4 aParams;
 attribute vec4 aPulse;
+attribute float aEnv;
 uniform float uMode;
+varying float vEnv;
 varying float vT;
 varying float vOffset;
 varying vec4 vWidth;
@@ -60,6 +63,7 @@ void main() {
   vColor = aColor;
   vParams = aParams;
   vPulse = aPulse;
+  vEnv = aEnv;
   vWorld = p;
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
 }`;
@@ -68,7 +72,13 @@ const FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uMode;
 uniform float uGain;
-uniform float uLevel;
+uniform float uBase;
+uniform float uAudioTime;
+uniform float uLightSpeed;
+uniform float uPulsesOn;
+uniform sampler2D uPulses;
+uniform vec4 uEnv[4];
+varying float vEnv;
 varying float vT;
 varying float vOffset;
 varying vec4 vWidth;
@@ -77,6 +87,39 @@ varying vec4 vParams;
 varying vec4 vPulse;
 varying vec3 vWorld;
 ${SIMPLEX_GLSL}
+
+// Same shape as envelopeAt() in audio/instruments.ts: linear attack, exponential decay
+// to sustain, exponential release. Plateaus (merged fast pulses) hold at full level.
+float envAt(vec4 e, float hold, float dt, bool plateau) {
+  float relAt = max(hold, e.x);
+  float t = min(dt, relAt);
+  float lvl = t < e.x ? t / e.x : (plateau ? 1.0 : e.z + (1.0 - e.z) * exp(-(t - e.x) / e.y));
+  if (dt > relAt) lvl *= exp(-(dt - relAt) / e.w);
+  return lvl;
+}
+
+/**
+ * Swell at this point of the beam: the max (never the sum) over pulses of the envelope,
+ * delayed by the light travel time from the pulse source. Evaluated on the audio clock.
+ */
+float swellAt(float s) {
+  float ch = floor(vPulse.z + 0.5);
+  if (uPulsesOn < 0.5 || ch < 0.0) return 0.0;
+  vec4 e = uEnv[int(floor(vEnv + 0.5))];
+  float delay = (s - vPulse.y) / uLightSpeed + vPulse.w * vT;
+  float tau = uAudioTime - delay;
+  float E = 0.0;
+  for (int i = 0; i < ${PULSES_PER_CHANNEL}; i++) {
+    vec4 p = texelFetch(uPulses, ivec2(i, int(ch)), 0);
+    if (p.w < 0.5) break;
+    float dt = tau - p.x;
+    if (dt < 0.0) break;
+    if (dt > p.y + e.w * 7.0) continue;
+    E = max(E, envAt(e, p.y, dt, p.z < 0.0) * abs(p.z));
+  }
+  return E;
+}
+
 void main() {
   float len = vParams.y;
   float s = vT * len;
@@ -84,7 +127,9 @@ void main() {
   float fan = mix(vWidth.z, vWidth.w, vT);
   float w = max(${MIN_WIDTH.toFixed(3)}, max(phys, fan));
   float radiance = min(vParams.x * ${BASE_WIDTH.toFixed(3)} / w, 7.0);
-  float level = uLevel;
+  float E = swellAt(vPulse.x + s);
+  // Never dark: a base glow plus the swell, base + depth ≤ 1 by construction.
+  float level = uBase + (1.0 - uBase) * E;
 
   // Slow drifting density field: light scattering in slightly hazy air.
   float n1 = snoise(vWorld * 0.9 + vec3(0.0, uTime * 0.07, uTime * 0.05));
@@ -95,10 +140,11 @@ void main() {
     float x = vOffset / w;
     float core = exp(-x * x * 7.0);
     // Glow scales with the beam's own width so neighbouring fan rays keep their colour.
-    float glow = exp(-x * x * 0.9);
+    // The swell also widens the glow, so it reads as breathing rather than blinking.
+    float glow = exp(-x * x * 0.9 / (1.0 + 1.6 * E));
     // Wide, faint scatter halo: what makes the beam read as light in hazy air.
     float halo = exp(-abs(vOffset) / (0.09 + w * 0.8));
-    vec3 c = vColor * radiance * level * (core * 1.25 + glow * 0.16 * haze) + vColor * halo * 0.05 * haze * level * min(vParams.x * 6.0, 1.0);
+    vec3 c = vColor * radiance * level * (core * 1.6 + glow * (0.2 + 0.35 * E) * haze) + vColor * halo * (0.06 + 0.12 * E) * haze * level * min(vParams.x * 6.0, 1.0);
     // Very bright cores desaturate towards white, like an overexposed laser line.
     c += vec3(core * max(radiance * level - 1.3, 0.0) * 0.25);
     gl_FragColor = vec4(c * uGain, 1.0);
@@ -110,7 +156,21 @@ void main() {
   }
 }`;
 
-export function createBeamMaterial(mode: 'beam' | 'spill'): THREE.ShaderMaterial {
+export type BeamSharedUniforms = Record<'uAudioTime' | 'uLightSpeed' | 'uPulsesOn' | 'uPulses' | 'uEnv' | 'uBase', THREE.IUniform>;
+
+export function createSharedUniforms(): BeamSharedUniforms {
+  return {
+    uBase: { value: 0.55 },
+    uAudioTime: { value: 0 },
+    uLightSpeed: { value: 6 },
+    uPulsesOn: { value: 0 },
+    uPulses: { value: null },
+    uEnv: { value: [new THREE.Vector4(0.08, 0.2, 0, 0.3), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
+  };
+}
+
+/** Per-material uniforms are own; pulse/clock uniforms are shared objects across all beams. */
+export function createBeamMaterial(mode: 'beam' | 'spill', shared: BeamSharedUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexShader: VERT,
     fragmentShader: FRAG,
@@ -118,7 +178,7 @@ export function createBeamMaterial(mode: 'beam' | 'spill'): THREE.ShaderMaterial
       uTime: { value: 0 },
       uMode: { value: mode === 'beam' ? 0 : 1 },
       uGain: { value: 1 },
-      uLevel: { value: 0.75 },
+      ...shared,
     },
     blending: THREE.AdditiveBlending,
     transparent: true,

@@ -195,7 +195,7 @@ export const DEMO_SCENES: DemoScene[] = [
           origin: { x: 3, y: 14 },
           heading: 12,
           loom: { at: 4, length: 3, subdivision: '1/16', title: 'Prelude — arpeggio', ...preludeArp },
-          lens: { at: 8, focal: 4.5, aperture: 4.5 },
+          lens: { at: 8, focal: 2.9, aperture: 4.5 },
           receptor: { at: 12.2, aperture: 2, instrument: 'pluck', octave: 3, span: 3, voices: 1, gain: 0.9 },
         }),
         ...chain({
