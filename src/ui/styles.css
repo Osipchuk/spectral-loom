@@ -1,0 +1,382 @@
+/* Every selector is scoped under .sl-root so the demo never leaks styles into a host page. */
+.sl-root {
+  --sl-bg: rgba(12, 13, 18, 0.66);
+  --sl-bg-solid: #0c0d12;
+  --sl-line: rgba(255, 255, 255, 0.07);
+  --sl-line-strong: rgba(255, 255, 255, 0.14);
+  --sl-fg: #e6e8ee;
+  --sl-fg-dim: #8b90a0;
+  --sl-fg-faint: #5c6070;
+  --sl-accent: #8fb8ff;
+  --sl-accent-soft: rgba(143, 184, 255, 0.16);
+  --sl-danger: #ff8a7a;
+  --sl-serif: 'Newsreader', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --sl-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --sl-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #020203;
+  color: var(--sl-fg);
+  font: 12px/1.4 var(--sl-sans);
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  contain: strict;
+}
+
+.sl-root *,
+.sl-root *::before,
+.sl-root *::after {
+  box-sizing: border-box;
+}
+
+.sl-root .sl-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.sl-root .sl-panel {
+  background: var(--sl-bg);
+  border: 1px solid var(--sl-line);
+  border-radius: 12px;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.sl-root .sl-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.sl-root .sl-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- title ---------- */
+.sl-root .sl-title {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  pointer-events: none;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
+}
+.sl-root .sl-title-name {
+  font: italic 400 22px/1 var(--sl-serif);
+  letter-spacing: 0.01em;
+  color: #f2f0ea;
+}
+.sl-root .sl-title-sub {
+  font: 400 10px/1 var(--sl-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sl-fg-faint);
+}
+
+/* ---------- palette ---------- */
+.sl-root .sl-palette {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+.sl-root .sl-palette-btn {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 8px;
+  border-radius: 8px;
+  color: var(--sl-fg-dim);
+  cursor: grab;
+  font: 500 11px/1 var(--sl-sans);
+  letter-spacing: 0.02em;
+  transition: background 0.15s, color 0.15s;
+}
+.sl-root .sl-palette-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--sl-fg);
+}
+.sl-root .sl-palette-btn:active {
+  cursor: grabbing;
+}
+.sl-root .sl-palette-btn:focus-visible {
+  outline: 1px solid var(--sl-accent);
+}
+
+/* ---------- side ---------- */
+.sl-root .sl-side {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  bottom: 44px;
+  width: 244px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.sl-root .sl-side > * {
+  pointer-events: auto;
+}
+.sl-root .sl-inspector,
+.sl-root .sl-globals {
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.sl-root .sl-inspector {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+.sl-root .sl-globals {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin-top: auto;
+}
+.sl-root .sl-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 500 10px/1 var(--sl-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sl-fg-dim);
+  margin-bottom: 12px;
+}
+.sl-root .sl-panel-title .sl-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--sl-fg);
+}
+.sl-root .sl-badge {
+  margin-left: auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  border: 1px solid var(--sl-line-strong);
+}
+.sl-root .sl-badge[data-on='true'] {
+  color: #9ff0b8;
+  border-color: rgba(159, 240, 184, 0.3);
+}
+.sl-root .sl-hint {
+  margin: 0;
+  color: var(--sl-fg-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.sl-root .sl-field {
+  margin-top: 10px;
+}
+.sl-root .sl-field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+.sl-root .sl-field-label {
+  color: var(--sl-fg-dim);
+  font-size: 11px;
+}
+.sl-root .sl-field-value {
+  font: 400 11px/1 var(--sl-mono);
+  color: var(--sl-fg);
+  font-variant-numeric: tabular-nums;
+}
+.sl-root .sl-field-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sl-root .sl-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+}
+.sl-root .sl-range::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--sl-line-strong);
+  border-radius: 2px;
+}
+.sl-root .sl-range::-moz-range-track {
+  height: 2px;
+  background: var(--sl-line-strong);
+  border-radius: 2px;
+}
+.sl-root .sl-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px var(--sl-accent-soft), 0 0 12px rgba(143, 184, 255, 0.45);
+}
+.sl-root .sl-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px var(--sl-accent-soft), 0 0 12px rgba(143, 184, 255, 0.45);
+}
+.sl-root .sl-range:focus-visible {
+  outline: none;
+}
+.sl-root .sl-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(143, 184, 255, 0.45);
+}
+
+.sl-root .sl-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--sl-line);
+  border-radius: 8px;
+}
+.sl-root .sl-seg-btn {
+  all: unset;
+  flex: 1;
+  text-align: center;
+  padding: 5px 4px;
+  border-radius: 6px;
+  color: var(--sl-fg-dim);
+  font: 400 11px/1 var(--sl-mono);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sl-root .sl-seg-btn:hover {
+  color: var(--sl-fg);
+}
+.sl-root .sl-seg-btn[aria-pressed='true'] {
+  background: var(--sl-accent-soft);
+  color: #dbe7ff;
+}
+.sl-root .sl-seg-btn:focus-visible {
+  outline: 1px solid var(--sl-accent);
+}
+
+.sl-root .sl-toggle {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--sl-line-strong);
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+  transition: background 0.2s;
+}
+.sl-root .sl-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #cfd5e4;
+  transition: transform 0.2s;
+}
+.sl-root .sl-toggle:checked {
+  background: rgba(143, 184, 255, 0.5);
+}
+.sl-root .sl-toggle:checked::after {
+  transform: translateX(12px);
+  background: #fff;
+}
+
+.sl-root .sl-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+.sl-root .sl-btn {
+  all: unset;
+  flex: 1;
+  text-align: center;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--sl-line-strong);
+  color: var(--sl-fg-dim);
+  font: 500 11px/1 var(--sl-sans);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sl-root .sl-btn:hover {
+  color: var(--sl-fg);
+  background: rgba(255, 255, 255, 0.05);
+}
+.sl-root .sl-btn:focus-visible {
+  outline: 1px solid var(--sl-accent);
+}
+.sl-root .sl-btn-danger:hover {
+  color: var(--sl-danger);
+  border-color: rgba(255, 138, 122, 0.4);
+}
+
+/* ---------- footer ---------- */
+.sl-root .sl-keys {
+  position: absolute;
+  left: 18px;
+  bottom: 14px;
+  color: var(--sl-fg-faint);
+  font: 400 10.5px/1 var(--sl-sans);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.sl-root .sl-keys kbd {
+  font: 400 10px/1 var(--sl-mono);
+  color: var(--sl-fg-dim);
+  padding: 2px 5px;
+  margin: 0 3px 0 8px;
+  border: 1px solid var(--sl-line-strong);
+  border-radius: 4px;
+}
+.sl-root .sl-keys kbd + kbd {
+  margin-left: 0;
+}
+.sl-root .sl-stats {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  font: 400 10px/1 var(--sl-mono);
+  color: var(--sl-fg-faint);
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .sl-root .sl-keys {
+    display: none;
+  }
+  .sl-root .sl-palette-label {
+    display: none;
+  }
+  .sl-root .sl-side {
+    width: 210px;
+  }
+}
