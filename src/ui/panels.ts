@@ -12,9 +12,10 @@ export const ICONS: Record<ElementKind, string> = {
   modulator: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="4" r="1"/><circle cx="20" cy="12" r="1"/><circle cx="12" cy="20" r="1"/><circle cx="4" cy="12" r="1"/><path d="M2 12h20" opacity=".5"/>',
   receptor: '<rect x="14" y="4" width="6" height="16" rx="1.5"/><path d="M14 9v6" stroke-width="2.5"/><path d="M2 12h10" opacity=".6"/>',
   blocker: '<rect x="9" y="3" width="6" height="18" rx="1.5" fill="currentColor" opacity=".35"/><path d="M2 12h6" opacity=".6"/>',
+  loom: '<rect x="8" y="3" width="8" height="18" rx="1"/><circle cx="10.5" cy="7" r=".9" fill="currentColor"/><circle cx="13.5" cy="10" r=".9" fill="currentColor"/><circle cx="10.5" cy="14" r=".9" fill="currentColor"/><circle cx="13.5" cy="17" r=".9" fill="currentColor"/><path d="M2 12h6M16 12h6" opacity=".5"/>',
 };
 
-export const PALETTE_ORDER: ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'modulator', 'receptor', 'blocker'];
+export const PALETTE_ORDER: ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'modulator', 'loom', 'receptor', 'blocker'];
 
 function fieldRow<T>(field: Field<T>, target: T, onChange: (v: FieldValue) => void): HTMLElement {
   const value = field.get(target);

@@ -1,7 +1,7 @@
 import type { SceneElement } from '../scene/types';
 import { add, cross, dot, fromAngle, norm, perp, rotate, scale, sub, type Vec2 } from './vec2';
 
-export type SurfaceRole = 'glass' | 'mirror' | 'lens' | 'filter' | 'absorb' | 'receptor';
+export type SurfaceRole = 'glass' | 'mirror' | 'lens' | 'filter' | 'absorb' | 'receptor' | 'loom';
 
 export interface SegmentCollider {
   kind: 'seg';
@@ -83,6 +83,8 @@ export function elementColliders(el: SceneElement): Collider[] {
       return [lineCollider(el.pos, el.rotation, el.aperture, 'receptor', el.id)];
     case 'blocker':
       return [lineCollider(el.pos, el.rotation, el.length, 'absorb', el.id)];
+    case 'loom':
+      return [lineCollider(el.pos, el.rotation, el.length, 'loom', el.id)];
     case 'modulator':
       return [{ kind: 'circle', c: el.pos, r: MODULATOR_RADIUS, role: 'modulator', elementId: el.id, face: 0 }];
   }

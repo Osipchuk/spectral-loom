@@ -7,14 +7,24 @@ export type RayLight = { kind: 'band'; minNm: number; maxNm: number } | { kind: 
 
 export const WHITE: RayLight = { kind: 'band', minNm: VISIBLE_MIN_NM, maxNm: VISIBLE_MAX_NM };
 
+const C_NM_THZ = 299792.458;
+
+/** Optical frequency in THz. */
+export function frequencyTHz(nm: number): number {
+  return C_NM_THZ / nm;
+}
+
 /**
- * Wavelength samples (bin centres) used when a band is dispersed. A full white band
+ * Wavelength samples used when a band is dispersed. Samples are spaced evenly in
+ * log-frequency (i.e. evenly in pitch), so every scale degree of the pitch mapping gets
+ * at least one ray whenever there are at least as many rays as degrees. A full white band
  * gets `raysPerFullSpectrum` rays; narrower bands get proportionally fewer, at least 3.
  */
 export function sampleBand(minNm: number, maxNm: number, raysPerFullSpectrum: number): number[] {
   const count = Math.max(3, Math.round((raysPerFullSpectrum * (maxNm - minNm)) / VISIBLE_SPAN));
-  const step = (maxNm - minNm) / count;
-  return Array.from({ length: count }, (_, i) => minNm + step * (i + 0.5));
+  const fLo = frequencyTHz(maxNm);
+  const ratio = frequencyTHz(minNm) / fLo;
+  return Array.from({ length: count }, (_, i) => C_NM_THZ / (fLo * ratio ** ((i + 0.5) / count)));
 }
 
 function smoothstep(e0: number, e1: number, x: number): number {

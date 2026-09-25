@@ -1,4 +1,5 @@
 import { mount } from './embed';
 
 const host = document.getElementById('app');
-if (host) mount(host);
+const demo = new URLSearchParams(location.search).get('demo') ?? undefined;
+if (host) mount(host, { demo });

@@ -13,7 +13,7 @@ export type NodeId = string;
 
 export type Subdivision = '1/4' | '1/8' | '1/16';
 export type Instrument = 'pad' | 'pluck' | 'bell';
-export type ScaleName = 'majorPent' | 'minorPent' | 'dorian';
+export type ScaleName = 'majorPent' | 'minorPent' | 'dorian' | 'major' | 'minor';
 
 export type SpectrumSpec = { kind: 'white' } | { kind: 'band'; minNm: number; maxNm: number };
 
@@ -74,7 +74,33 @@ export interface Receptor extends BaseElement {
   kind: 'receptor';
   aperture: number;
   instrument: Instrument;
+  /** Octave of scale degree 0 (the reddest light). */
   octave: number;
+  /** Octaves the visible spectrum is stretched over. */
+  span: number;
+  voices: number;
+  gain: number;
+}
+
+/** One note on a loom card, in scale-degree space (0 = root at the receptor's octave). */
+export interface LoomNote {
+  at: number;
+  len: number;
+  deg: number;
+}
+
+/**
+ * A punched card across a dispersed fan: at each step it launches swells only on the rays
+ * whose pitch matches a hole. This is how a composed melody enters the instrument.
+ */
+export interface Loom extends BaseElement {
+  kind: 'loom';
+  length: number;
+  subdivision: Subdivision;
+  steps: number;
+  notes: LoomNote[];
+  depth: number;
+  title: string;
 }
 
 export interface Blocker extends BaseElement {
@@ -82,7 +108,7 @@ export interface Blocker extends BaseElement {
   length: number;
 }
 
-export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker;
+export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker | Loom;
 export type ElementKind = SceneElement['kind'];
 export type ElementOf<K extends ElementKind> = Extract<SceneElement, { kind: K }>;
 

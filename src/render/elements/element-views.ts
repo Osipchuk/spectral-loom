@@ -4,6 +4,7 @@ import { EMITTER_HALF, MODULATOR_RADIUS, prismVertices } from '../../optics/geom
 import type { SceneElement } from '../../scene/types';
 import { BEAM_HEIGHT, yawFor, type TableFrame } from '../frame';
 import { bandToRGB, type RGB } from '../spectral-color';
+import { CARD_BOTTOM, CARD_HEIGHT, createCardSurface, type CardSurface } from './loom-card';
 import type { Materials } from './materials';
 
 export const INSTRUMENT_COLORS: Record<string, RGB> = {
@@ -29,6 +30,7 @@ export interface ElementView {
     slit?: THREE.MeshBasicMaterial;
     dots?: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>[];
     aperture?: THREE.MeshBasicMaterial;
+    card?: CardSurface;
   };
   dispose(): void;
 }
@@ -225,6 +227,37 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       break;
     }
 
+    case 'loom': {
+      const surface = createCardSurface(el.length);
+      dynamic.card = surface;
+      const paper = new THREE.MeshStandardMaterial({
+        map: surface.texture,
+        alphaMap: surface.alpha,
+        transparent: true,
+        roughness: 0.9,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      owned.push(paper);
+      const card = new THREE.Mesh(new THREE.PlaneGeometry(el.length, CARD_HEIGHT), disabled ? mats.ghost : paper);
+      card.rotation.y = Math.PI / 2;
+      card.position.y = CARD_BOTTOM + CARD_HEIGHT / 2;
+      group.add(card);
+      const rail = mesh(new RoundedBoxGeometry(0.14, 0.07, el.length + 0.3, 2, 0.02), m(mats.brass));
+      rail.position.y = CARD_BOTTOM - 0.02;
+      const top = rail.clone();
+      top.position.y = CARD_BOTTOM + CARD_HEIGHT + 0.03;
+      group.add(rail, top);
+      for (const z of [-(el.length / 2 + 0.12), el.length / 2 + 0.12]) {
+        const roller = mesh(new THREE.CylinderGeometry(0.07, 0.07, CARD_HEIGHT + 0.16, 16), m(mats.anodized));
+        roller.position.set(0, CARD_BOTTOM + CARD_HEIGHT / 2, z);
+        group.add(roller);
+      }
+      pickSize = [0.7, el.length];
+      radius = el.length / 2 + 0.5;
+      break;
+    }
+
     case 'modulator': {
       const ring = mesh(new THREE.TorusGeometry(MODULATOR_RADIUS, 0.05, 12, 64), m(mats.brass));
       ring.rotation.x = Math.PI / 2;
@@ -267,6 +300,8 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose();
       });
       for (const mat of owned) mat.dispose();
+      dynamic.card?.texture.dispose();
+      dynamic.card?.alpha.dispose();
     },
   };
 }
