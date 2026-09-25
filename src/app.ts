@@ -5,6 +5,7 @@ import { ENVELOPES, envelopeAt } from './audio/instruments';
 import { degreeToMidi, lightToDegree } from './music/pitch';
 import { lightToRGB } from './render/spectral-color';
 import { NoteLabels, type NoteLabel } from './ui/note-labels';
+import { CALM_NIGHT, moodWeather, weatherName, type Weather } from './music/mood';
 import { AUDIO_THRESHOLD } from './timing/arrivals';
 import { trace } from './optics/tracer';
 import type { RayTree } from './optics/types';
@@ -25,10 +26,21 @@ import { h } from './ui/dom';
 import { Interaction } from './ui/interaction';
 import { Panels } from './ui/panels';
 import { Transport } from './ui/transport';
+import { Tutorial } from './ui/tutorial';
+import { emptyScene } from './scene/defaults';
+import type { ElementKind } from './scene/types';
 
 export interface AppOptions {
-  scene: SceneModel;
+  /** Scene to open; omitted → an empty table with the welcome screen. */
+  scene?: SceneModel;
   demoId?: string | null;
+}
+
+/** The empty table the welcome screen and tutorial start from. */
+export function starterScene(): SceneModel {
+  const s = emptyScene('Empty table');
+  s.settings = { ...s.settings, bpm: 100, scale: 'majorPent', root: 0 };
+  return s;
 }
 
 /**
@@ -65,20 +77,27 @@ export class App {
   /** Longest light travel time in the scene, seconds: how far back pulses stay visible. */
   private maxDelayS = 0;
   private noteLabels = new NoteLabels();
+  private lastMood = 0;
+  private weatherLabel = 'clear night';
+  /** `?weather=aurora|rain|snow|mist` pins the sky (for screenshots and debugging). */
+  private pinnedWeather: Weather | null = pinnedWeatherFromUrl();
   /** Silent clock that animates light before audio is started. */
   private previewClock: BeatClock;
 
+  private tutorial: Tutorial | null = null;
+
   constructor(host: HTMLElement, opts: AppOptions) {
-    this.store = new SceneStore(opts.scene);
+    const scene = opts.scene ?? starterScene();
+    this.store = new SceneStore(scene);
     this.demoId = opts.demoId ?? null;
-    this.engine = new AudioEngine(opts.scene.settings.bpm);
+    this.engine = new AudioEngine(scene.settings.bpm);
     this.canvas = h('canvas.sl-canvas', { 'aria-label': 'Spectral Loom table' });
     this.stats = h('div.sl-stats', { 'aria-hidden': 'true' });
     this.root = h('div.sl-root', { tabindex: 0 }, this.canvas);
     host.append(this.root);
 
     this.renderer = new Renderer(this.canvas, this.store.scene);
-    this.previewClock = new BeatClock(opts.scene.settings.bpm);
+    this.previewClock = new BeatClock(scene.settings.bpm);
     this.previewClock.anchor(performance.now() / 1000, 0);
     const shared = this.renderer.beams.shared;
     shared.uPulses!.value = this.pulseTexture.texture;
@@ -105,7 +124,7 @@ export class App {
           this.engine.setMasterDb(db);
         },
       },
-      opts.scene.settings.masterDb,
+      scene.settings.masterDb,
     );
     this.transport.setScene(this.demoId);
 
@@ -118,7 +137,7 @@ export class App {
     const hint = h('footer.sl-keys', {
       html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>space</kbd> play',
     });
-    this.overlay = this.buildOverlay();
+    this.overlay = opts.scene ? this.buildOverlay() : this.buildWelcome();
     this.root.append(this.noteLabels.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
@@ -157,12 +176,84 @@ export class App {
     return overlay;
   }
 
-  private async start(): Promise<void> {
-    if (!this.engine.ready) await this.engine.start(this.store.scene.settings.masterDb);
-    this.overlay?.classList.add('sl-hidden');
+  private buildWelcome(): HTMLElement {
+    const tutorialBtn = h('button.sl-start-btn', { type: 'button' }, h('span', { text: 'Build your first melody' }));
+    tutorialBtn.addEventListener('click', () => this.startTutorial());
+    const demos = h('div.sl-welcome-demos');
+    for (const d of DEMO_SCENES) {
+      if (d.id === 'bench') continue;
+      const b = h('button.sl-demo-card', { type: 'button' }, h('span.sl-demo-title', { text: d.title }), h('span.sl-demo-sub', { text: d.subtitle }));
+      b.addEventListener('click', () => {
+        this.loadDemo(d.id);
+        void this.start();
+      });
+      demos.append(b);
+    }
+    const empty = h('button.sl-link', { type: 'button', text: 'or start with an empty table' });
+    empty.addEventListener('click', () => this.dismissOverlay());
+    return h(
+      'div.sl-overlay.sl-welcome',
+      {},
+      h(
+        'div.sl-overlay-card',
+        {},
+        h('div.sl-overlay-kicker', { text: 'Spectral Loom' }),
+        h('h2.sl-overlay-title', { text: 'Light is the score.' }),
+        h('p.sl-overlay-text', {
+          text: 'Place glass on a table and a beam of light plays it. White light splits into colours, every colour is a pitch, and light travels slowly — so distance becomes time.',
+        }),
+        tutorialBtn,
+        h('p.sl-overlay-foot', { text: 'A two-minute guided tour · sound on' }),
+        h('div.sl-welcome-label', { text: 'Or listen to a finished table' }),
+        demos,
+        empty,
+      ),
+    );
+  }
+
+  private dismissOverlay(): void {
     const o = this.overlay;
     this.overlay = null;
+    o?.classList.add('sl-hidden');
     window.setTimeout(() => o?.remove(), 700);
+    this.root.focus({ preventScroll: true });
+  }
+
+  private startTutorial(): void {
+    this.loadScene(starterScene());
+    this.dismissOverlay();
+    // Build the audio graph now, inside this click, so later steps can start sound.
+    void this.engine.start(this.store.scene.settings.masterDb);
+    this.tutorial = new Tutorial({
+      store: this.store,
+      setGhost: (el) => this.renderer.setGhost(el),
+      highlight: (kind) => this.highlightPalette(kind),
+      ensureAudio: () => {
+        if (!this.engine.playing) void this.start();
+      },
+      openDemo: (id) => {
+        this.tutorial?.close();
+        this.loadDemo(id);
+        void this.start();
+      },
+      finish: () => {
+        this.tutorial = null;
+        this.interaction.onClickPlace = null;
+      },
+    });
+    this.interaction.onClickPlace = () => this.tutorial?.snapNow();
+    this.root.append(this.tutorial.el);
+  }
+
+  private highlightPalette(kind: ElementKind | null): void {
+    for (const b of this.panels.palette.querySelectorAll<HTMLElement>('.sl-palette-btn')) {
+      b.classList.toggle('sl-attn', b.dataset.kind === kind);
+    }
+  }
+
+  private async start(): Promise<void> {
+    if (!this.engine.ready) await this.engine.start(this.store.scene.settings.masterDb);
+    if (this.overlay) this.dismissOverlay();
     this.engine.play();
     this.transport.setPlaying(true);
     this.root.focus({ preventScroll: true });
@@ -313,6 +404,7 @@ export class App {
     this.updateLight(heard, live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
+    this.updateMood(heard, wall);
 
     const sel = this.store.selected ?? null;
     this.renderer.gizmo.setSelected(sel, sel ? (this.renderer.views.get(sel.id)?.radius ?? 1) : 1);
@@ -386,6 +478,17 @@ export class App {
     }
   }
 
+  /** Let the sky follow the music: re-estimate the mood twice a second. */
+  private updateMood(heard: number, wall: number): void {
+    if (wall - this.lastMood < 0.5) return;
+    this.lastMood = wall;
+    const windowS = 6;
+    const notes = this.engine.playing ? this.engine.recentNotes().filter((n) => n.time <= heard && n.time > heard - windowS) : [];
+    const w = this.pinnedWeather ?? moodWeather({ scale: this.store.scene.settings.scale, bpm: this.store.scene.settings.bpm, notes, windowS });
+    this.renderer.atmosphere.setWeather(w, this.pinnedWeather !== null);
+    this.weatherLabel = weatherName(w);
+  }
+
   private updateStats(now: number): void {
     this.frames.count += 1;
     const dt = now * 1000 - this.frames.t0;
@@ -394,7 +497,7 @@ export class App {
     this.renderer.adaptResolution(1000 / fps);
     this.frames = { count: 0, t0: now * 1000 };
     const segs = this.tree?.segments.length ?? 0;
-    this.stats.textContent = `${fps.toFixed(0)} fps · ${segs} rays${this.tree?.truncated ? ' (capped)' : ''}`;
+    this.stats.textContent = `sky: ${this.weatherLabel} · ${fps.toFixed(0)} fps · ${segs} rays${this.tree?.truncated ? ' (capped)' : ''}`;
   }
 
   loadScene(scene: SceneModel, demoId: string | null = null): void {
@@ -460,6 +563,17 @@ export class App {
     this.renderer.dispose();
     this.root.remove();
   }
+}
+
+function pinnedWeatherFromUrl(): Weather | null {
+  const w = new URLSearchParams(location.search).get('weather');
+  if (!w) return null;
+  const base = { ...CALM_NIGHT, mist: 0.2 };
+  if (w === 'aurora') return { ...base, aurora: 1, clouds: 0.05 };
+  if (w === 'rain') return { ...base, rain: 1, clouds: 0.85, mist: 0.4 };
+  if (w === 'snow') return { ...base, snow: 1, clouds: 0.5, mist: 0.5 };
+  if (w === 'mist') return { ...base, mist: 1, clouds: 0.3 };
+  return base;
 }
 
 function slug(s: string): string {

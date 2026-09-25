@@ -5,7 +5,7 @@ import type { SceneModel } from './scene/types';
 import './ui/styles.css';
 
 export interface MountOptions {
-  /** Demo to open (see DEMO_SCENES ids), or a full scene. Defaults to the first demo. */
+  /** Demo to open (see DEMO_SCENES ids), or a full scene. Defaults to the welcome screen. */
   demo?: string;
   scene?: SceneModel | string;
 }
@@ -21,9 +21,13 @@ export interface SpectralLoomHandle {
  * size; the demo fills it) and returns a handle whose destroy() releases WebGL and audio.
  */
 export function mount(container: HTMLElement, opts: MountOptions = {}): SpectralLoomHandle {
-  const demo = DEMO_SCENES.find((d) => d.id === opts.demo) ?? DEMO_SCENES[0]!;
-  const scene = opts.scene ? parseScene(opts.scene) : parseScene(demo.scene);
-  const app = new App(container, { scene, demoId: opts.scene ? null : demo.id });
+  const demo = DEMO_SCENES.find((d) => d.id === opts.demo);
+  // No scene and no demo: open on an empty table with the welcome screen and tutorial.
+  const app = opts.scene
+    ? new App(container, { scene: parseScene(opts.scene), demoId: null })
+    : demo
+      ? new App(container, { scene: parseScene(demo.scene), demoId: demo.id })
+      : new App(container, {});
 
   if (new URLSearchParams(location.search).has('debug')) {
     // Test hook for headless checks: render a demo offline and return WAV bytes as base64.

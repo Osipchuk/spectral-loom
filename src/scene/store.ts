@@ -8,8 +8,9 @@ import type { GlobalSettings, SceneElement, SceneModel } from './types';
  * - settings: global settings → retrace (dispersion) and/or retime
  * - selection: UI only
  * - load: whole scene replaced
+ * - drop: the user let go of something they were dragging (no data change by itself)
  */
-export type ChangeKind = 'geometry' | 'toggle' | 'settings' | 'selection' | 'load';
+export type ChangeKind = 'geometry' | 'toggle' | 'settings' | 'selection' | 'load' | 'drop';
 export type Listener = (kinds: ReadonlySet<ChangeKind>) => void;
 
 export class SceneStore {
@@ -34,6 +35,11 @@ export class SceneStore {
 
   get(id: string): SceneElement | undefined {
     return findElement(this.scene, id);
+  }
+
+  /** Signal that a drag ended, so listeners can react to the final placement. */
+  dropped(): void {
+    this.emit('drop');
   }
 
   select(id: string | null): void {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { RayTree } from '../optics/types';
-import { SIMPLEX_GLSL } from './beams/beam-material';
+import { hazeNoiseTexture, SIMPLEX_GLSL } from './beams/beam-material';
+import { CALM_NIGHT, type Weather } from '../music/mood';
 import { BEAM_HEIGHT, type TableFrame } from './frame';
 import { lightToRGB } from './spectral-color';
 
@@ -29,41 +30,125 @@ uniform float uTime;
 uniform vec2 uAspect;
 uniform vec2 uParallax;
 uniform float uEnergy;
+uniform float uHorizon;
+uniform vec4 uWeather; // aurora, rain, snow, mist
+uniform float uClouds;
+uniform sampler2D uNoise;
 varying vec2 vUv;
-${SIMPLEX_GLSL}
-float hash(float n) { return fract(sin(n) * 43758.5453); }
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float nz(vec2 q) { return texture2D(uNoise, q).r; }
+float fbm(vec2 q) { return nz(q) * 0.5 + nz(q * 2.03 + 0.31) * 0.3 + nz(q * 4.07 + 0.73) * 0.2; }
+
+// Mountain ridge height above the horizon at horizontal position x.
+float ridge(float x, float seed, float scale) {
+  float r = fbm(vec2(x * 0.11 * scale + seed, seed * 0.37));
+  float jag = nz(vec2(x * 0.9 * scale + seed * 3.1, 0.5)) * 0.25;
+  return pow(r, 1.6) * 0.9 + jag * 0.15;
+}
+
+vec3 aurora(vec2 p, float y) {
+  vec3 acc = vec3(0.0);
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    float x = p.x * (0.9 + fk * 0.25) + fk * 3.7;
+    float wave = fbm(vec2(x * 0.18, uTime * 0.012 + fk * 0.4));
+    float centre = 0.10 + 0.12 * wave + fk * 0.035;
+    float d = (y - centre) / (0.035 + 0.05 * wave);
+    // Curtains: bright lower hem, long soft fade upwards, vertical rays.
+    float curtain = exp(-d * d * (d < 0.0 ? 6.0 : 0.6));
+    float rays = 0.55 + 0.45 * nz(vec2(x * 2.2, uTime * 0.03 + fk));
+    float fade = smoothstep(0.0, 0.3, wave);
+    vec3 col = mix(vec3(0.15, 1.0, 0.55), vec3(0.35, 0.55, 1.0), clamp(d * 0.35 + fk * 0.3, 0.0, 1.0));
+    col = mix(col, vec3(0.85, 0.35, 1.0), clamp(d * 0.2 - 0.3, 0.0, 1.0));
+    acc += col * curtain * rays * fade;
+  }
+  return acc;
+}
+
+vec3 sky(vec2 p, float y, bool reflected) {
+  vec3 top = vec3(0.004, 0.006, 0.018);
+  vec3 hor = mix(vec3(0.025, 0.04, 0.085), vec3(0.05, 0.055, 0.065), uClouds);
+  vec3 c = mix(hor, top, smoothstep(0.0, 0.5, y));
+  // Stars, twinkling, hidden by cloud.
+  vec2 g = p * 70.0;
+  vec2 id = floor(g);
+  float h = hash(id);
+  vec2 off = vec2(hash(id + 1.7), hash(id + 3.1)) - 0.5;
+  float star = step(0.975, h) * smoothstep(0.09, 0.0, length(fract(g) - 0.5 - off * 0.6));
+  star *= 0.55 + 0.45 * sin(uTime * (0.8 + h * 3.0) + h * 40.0);
+  c += vec3(0.75, 0.82, 1.0) * star * (1.0 - uClouds) * smoothstep(0.01, 0.15, y) * 0.8;
+  // Moon with a soft halo.
+  vec2 moon = vec2(0.22 * uAspect.x, 0.13);
+  float md = length(vec2(p.x, y) - moon);
+  float disc = reflected ? 0.0 : smoothstep(0.022, 0.019, md) * 0.75;
+  c += vec3(0.9, 0.92, 1.0) * (disc + exp(-md * 10.0) * 0.07) * (1.0 - uClouds * 0.7);
+  c += aurora(p, y) * uWeather.x * (0.55 + 0.45 * uEnergy) * (1.0 - uClouds * 0.6) * 0.5;
+  // Drifting cloud bank.
+  float cl = fbm(vec2(p.x * 0.35 + uTime * 0.004, y * 1.6));
+  c = mix(c, vec3(0.03, 0.035, 0.045) + hor * 0.5, smoothstep(0.45, 0.75, cl) * uClouds * 0.9);
+  return c;
+}
+
+vec3 landscape(vec2 p, float y, bool reflected) {
+  vec3 c = sky(p, max(y, 0.0), reflected);
+  // Two ridges: far (bluish, misty, lit by the sky) and near (almost black).
+  float far = 0.05 + 0.13 * ridge(p.x + uParallax.x * 0.2, 1.3, 1.0);
+  float near = 0.02 + 0.07 * ridge(p.x + uParallax.x * 0.45, 7.9, 1.6);
+  vec3 skyGlow = vec3(0.1, 0.35, 0.25) * uWeather.x * 0.12;
+  vec3 farCol = mix(vec3(0.022, 0.03, 0.058), vec3(0.055, 0.062, 0.085), uWeather.w) + skyGlow;
+  // A faint moonlit rim on the far ridge.
+  float rim = smoothstep(far - 0.006, far, y) * step(y, far) * 0.6;
+  if (y < far) c = mix(farCol + vec3(0.05, 0.055, 0.07) * rim, c, 0.12 * uWeather.w);
+  if (y < near) c = vec3(0.006, 0.008, 0.014) + skyGlow * 0.3;
+  return c;
+}
+
 void main() {
-  vec2 uv = (vUv - 0.5) * uAspect;
-  float t = uTime;
-  // Velvet room: a low indigo glow behind the table, fading to black at the edges.
-  float r = length(uv - vec2(0.0, 0.08));
-  vec3 col = mix(vec3(0.030, 0.030, 0.060), vec3(0.004, 0.004, 0.008), smoothstep(0.0, 0.95, r));
-  // Two layers of slow smoke drifting at different depths (parallax with the camera).
-  vec2 p1 = uv * 1.6 + uParallax * 0.15;
-  vec2 p2 = uv * 3.2 + uParallax * 0.35;
-  float s1 = snoise(vec3(p1, t * 0.018)) * 0.5 + 0.5;
-  float s2 = snoise(vec3(p2 + 7.0, t * 0.027)) * 0.5 + 0.5;
-  float smoke = pow(s1, 2.2) * 0.8 + pow(s2, 3.0) * 0.5;
-  vec3 tintA = vec3(0.16, 0.07, 0.22);
-  vec3 tintB = vec3(0.04, 0.12, 0.20);
-  vec3 tintC = vec3(0.20, 0.10, 0.04);
-  vec3 tint = mix(mix(tintA, tintB, s2), tintC, smoothstep(0.55, 0.9, s1) * 0.5);
-  col += tint * smoke * (0.22 + 0.25 * uEnergy) * smoothstep(1.1, 0.2, r);
-  // Out-of-focus lights far away: discs with a faint rim, drifting very slowly.
-  for (int i = 0; i < 26; i++) {
-    float fi = float(i);
-    float depth = 0.3 + hash(fi * 3.1) * 0.7;
-    vec2 c = vec2(hash(fi * 1.7) - 0.5, hash(fi * 2.3) - 0.5) * uAspect * 1.15;
-    c += uParallax * depth * 0.25;
-    c += vec2(sin(t * 0.03 + fi), cos(t * 0.025 + fi * 1.3)) * 0.01;
-    float rad = mix(0.012, 0.055, hash(fi * 4.7)) * (1.3 - depth * 0.5);
-    float d = length(uv - c);
-    float disc = smoothstep(rad, rad * 0.45, d);
-    float rim = smoothstep(rad * 0.5, rad * 0.9, d) * disc * 0.35;
-    vec3 bc = mix(vec3(1.0, 0.62, 0.32), vec3(0.45, 0.62, 1.0), hash(fi * 5.9));
-    bc = mix(bc, vec3(0.85, 0.45, 0.95), step(0.8, hash(fi * 6.3)));
-    float tw = 0.75 + 0.25 * sin(t * (0.2 + hash(fi) * 0.4) + fi * 11.0);
-    col += bc * (disc * 0.6 + rim) * 0.045 * tw * (0.6 + 0.8 * uEnergy);
+  float hy = uHorizon + uParallax.y * 0.35;
+  vec2 p = vec2((vUv.x - 0.5) * uAspect.x + uParallax.x * 0.15, vUv.y);
+  float y = vUv.y - hy;
+  vec3 col;
+  if (y >= 0.0) {
+    col = landscape(p, y, false);
+  } else {
+    // Lake: the sky and mountains mirrored, broken by ripples (rain adds more).
+    float depth = -y;
+    float ripple = (nz(vec2(p.x * 1.5, depth * 18.0 - uTime * 0.05)) - 0.5) * (0.004 + depth * 0.03) * (1.0 + uWeather.y * 2.5);
+    vec3 refl = landscape(vec2(p.x + ripple, p.y), depth * 1.1 + ripple * 2.0, true);
+    float fres = mix(0.55, 0.2, smoothstep(0.0, 0.4, depth));
+    col = refl * fres + vec3(0.004, 0.006, 0.012);
+    // Moon glitter path on the water.
+    float glitter = step(0.9, nz(vec2(p.x * 14.0, depth * 70.0 + uTime * 0.2))) * exp(-abs(p.x - 0.22 * uAspect.x) * 14.0) * smoothstep(0.35, 0.0, depth);
+    col += vec3(0.6, 0.65, 0.8) * glitter * 0.35 * (1.0 - uClouds);
+    // Rain rings on the water.
+    vec2 rg = vec2(p.x * 16.0, depth * 40.0);
+    vec2 rid = floor(rg);
+    vec2 rc = vec2(hash(rid + 2.0), hash(rid + 4.0)) * 0.6 + 0.2;
+    float rt = fract(uTime * 0.6 + hash(rid) * 7.0);
+    float ring = abs(length((fract(rg) - rc) * vec2(1.0, 2.8)) - rt * 0.35);
+    col += vec3(0.25, 0.3, 0.4) * smoothstep(0.035, 0.0, ring) * (1.0 - rt) * step(0.8, hash(rid + 9.0)) * uWeather.y * 0.3;
+  }
+  // Mist hugging the horizon.
+  vec3 mistCol = vec3(0.07, 0.08, 0.11);
+  col = mix(col, mistCol, uWeather.w * 0.7 * exp(-abs(y) * 9.0));
+  // Rain streaks.
+  // Rain: thin slanted streaks in many columns, each column at its own speed and phase.
+  vec2 rp = vec2(p.x * 380.0 + vUv.y * 40.0, vUv.y * 2.2);
+  float cid = floor(rp.x);
+  float cx = abs(fract(rp.x) - 0.5);
+  float ph = fract(rp.y + uTime * (1.8 + hash(vec2(cid, 3.0)) * 1.2) + hash(vec2(cid, 2.0)));
+  float streak = step(0.965, hash(vec2(cid, 1.0))) * smoothstep(0.5, 0.15, cx) * smoothstep(0.0, 0.04, ph) * smoothstep(0.22, 0.04, ph);
+  col += vec3(0.4, 0.45, 0.55) * streak * uWeather.y * 0.3;
+  // Snow: three layers of slowly falling, swaying flakes.
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    float sc = 18.0 + fk * 14.0;
+    vec2 sp = vec2(p.x * sc + sin(uTime * 0.3 + vUv.y * 6.0 + fk) * 0.6, vUv.y * sc * 0.6 + uTime * (0.5 + fk * 0.25));
+    vec2 sid = floor(sp);
+    vec2 so = vec2(hash(sid), hash(sid + 5.0)) - 0.5;
+    float flake = step(0.82, hash(sid + 11.0)) * smoothstep(0.12, 0.0, length(fract(sp) - 0.5 - so * 0.5));
+    col += vec3(0.8, 0.85, 0.95) * flake * uWeather.z * (0.25 - fk * 0.05);
   }
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -130,6 +215,14 @@ export class Atmosphere {
   readonly group = new THREE.Group();
   private back: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private energy = 0;
+  /** Current weather, eased towards the target so the sky changes over several seconds. */
+  private weather: Weather = { ...CALM_NIGHT };
+  private target: Weather = { ...CALM_NIGHT };
+
+  setWeather(w: Weather, immediate = false): void {
+    this.target = w;
+    if (immediate) this.weather = { ...w };
+  }
   private motes: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private segData = new Float32Array(MAX_LIT_SEGMENTS * 2 * 4);
   private segTexture: THREE.DataTexture;
@@ -145,6 +238,10 @@ export class Atmosphere {
           uAspect: { value: new THREE.Vector2(1, 1) },
           uParallax: { value: new THREE.Vector2() },
           uEnergy: { value: 0 },
+          uHorizon: { value: 0.8 },
+          uWeather: { value: new THREE.Vector4(0.08, 0, 0, 0.35) },
+          uClouds: { value: 0.15 },
+          uNoise: { value: hazeNoiseTexture() },
         },
         depthWrite: false,
         depthTest: false,
@@ -214,7 +311,10 @@ export class Atmosphere {
    */
   update(time: number, pixelRatio: number, energy = 0, aspect = 1, parallax = new THREE.Vector2()): void {
     this.energy += (Math.min(1, energy) - this.energy) * 0.05;
+    for (const k of Object.keys(this.weather) as (keyof Weather)[]) this.weather[k] += (this.target[k] - this.weather[k]) * 0.008;
     const u = this.back.material.uniforms;
+    (u.uWeather!.value as THREE.Vector4).set(this.weather.aurora, this.weather.rain, this.weather.snow, this.weather.mist);
+    u.uClouds!.value = this.weather.clouds;
     u.uTime!.value = time;
     u.uEnergy!.value = this.energy;
     (u.uAspect!.value as THREE.Vector2).set(aspect, 1);

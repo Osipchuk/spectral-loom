@@ -177,6 +177,33 @@
   color: var(--sl-fg-dim);
 }
 
+.sl-root .sl-summary {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 0;
+}
+.sl-root .sl-summary::-webkit-details-marker {
+  display: none;
+}
+.sl-root .sl-summary::after {
+  content: '+';
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--sl-fg-faint);
+}
+.sl-root details[open] > .sl-summary {
+  margin-bottom: 12px;
+}
+.sl-root details[open] > .sl-summary::after {
+  content: '−';
+}
+.sl-root .sl-summary-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font: 400 10.5px/1 var(--sl-sans);
+  color: var(--sl-fg-faint);
+}
+
 /* ---------- note labels ---------- */
 .sl-root .sl-notes {
   position: absolute;
@@ -624,6 +651,143 @@
   margin: 18px 0 0;
   font: 400 11px/1 var(--sl-mono);
   color: var(--sl-fg-faint);
+}
+
+/* ---------- welcome ---------- */
+.sl-root .sl-welcome .sl-overlay-card {
+  max-width: 560px;
+}
+.sl-root .sl-welcome-label {
+  margin: 34px 0 10px;
+  font: 400 10px/1 var(--sl-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sl-fg-faint);
+}
+.sl-root .sl-welcome-demos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.sl-root .sl-demo-card {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  border-radius: 10px;
+  border: 1px solid var(--sl-line-strong);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.sl-root .sl-demo-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(190, 210, 255, 0.35);
+}
+.sl-root .sl-demo-card:focus-visible {
+  outline: 1px solid var(--sl-accent);
+}
+.sl-root .sl-demo-title {
+  font: italic 400 15px/1.2 var(--sl-serif);
+  color: var(--sl-fg);
+}
+.sl-root .sl-demo-sub {
+  font: 400 9.5px/1.2 var(--sl-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-fg-faint);
+}
+.sl-root .sl-link {
+  all: unset;
+  display: inline-block;
+  margin-top: 18px;
+  color: var(--sl-fg-dim);
+  font: 400 12px/1 var(--sl-sans);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.sl-root .sl-link:hover {
+  color: var(--sl-fg);
+}
+
+/* ---------- tutorial coach ---------- */
+.sl-root .sl-coach {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  width: min(460px, calc(100% - 560px));
+  min-width: 320px;
+  padding: 16px 18px;
+  z-index: 6;
+  border-color: rgba(190, 210, 255, 0.22);
+}
+.sl-root .sl-coach-count {
+  font: 400 10px/1 var(--sl-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sl-accent);
+}
+.sl-root .sl-coach-title {
+  margin: 8px 0 6px;
+  font: italic 400 20px/1.2 var(--sl-serif);
+  color: #f2eee4;
+}
+.sl-root .sl-coach-text {
+  margin: 0;
+  font: 400 13px/1.55 var(--sl-sans);
+  color: var(--sl-fg-dim);
+}
+.sl-root .sl-coach-hint {
+  margin: 8px 0 0;
+  font: 400 12px/1.4 var(--sl-sans);
+  color: #ffd79a;
+}
+.sl-root .sl-coach-hint:empty {
+  display: none;
+}
+.sl-root .sl-coach-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+.sl-root .sl-coach-actions .sl-btn {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+}
+.sl-root .sl-btn-primary {
+  color: #0b0c10;
+  background: #e9eeff;
+  border-color: transparent;
+}
+.sl-root .sl-btn-primary:hover {
+  color: #000;
+  background: #ffffff;
+}
+.sl-root .sl-btn-quiet {
+  border-color: transparent;
+  margin-left: auto;
+}
+.sl-root .sl-palette-btn.sl-attn {
+  color: #fff;
+  background: rgba(143, 184, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(143, 184, 255, 0.55), 0 0 18px rgba(143, 184, 255, 0.35);
+  animation: sl-attn 1.6s ease-in-out infinite;
+}
+@keyframes sl-attn {
+  50% {
+    box-shadow: inset 0 0 0 1px rgba(143, 184, 255, 0.9), 0 0 26px rgba(143, 184, 255, 0.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sl-root .sl-palette-btn.sl-attn,
+  .sl-root .sl-rec.sl-busy {
+    animation: none;
+  }
 }
 
 /* ---------- footer ---------- */

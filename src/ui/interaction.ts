@@ -60,6 +60,9 @@ export class Interaction {
     on(root, 'keydown', (e) => this.keyDown(e));
   }
 
+  /** Lets the tutorial move a click-placed element straight to its target. */
+  onClickPlace: ((id: string) => void) | null = null;
+
   get hovered(): string | null {
     return this.hoverId;
   }
@@ -175,6 +178,7 @@ export class Interaction {
     }
     this.mode = { kind: 'idle' };
     this.canvas.style.cursor = this.hoverId ? 'grab' : 'default';
+    if (m.kind === 'drag' || m.kind === 'rotate') this.store.dropped();
   }
 
   private doubleClick(e: MouseEvent): void {
@@ -262,9 +266,12 @@ export class Interaction {
         const { w, h } = this.store.scene.table;
         const el = makeElement(kind, this.snapPos({ x: w / 2, y: h / 2 }), defaultRotation(kind));
         this.store.add(el);
+        this.onClickPlace?.(el.id);
+        this.store.dropped();
         return;
       }
       if (mode.elementId && !overCanvas(ev)) this.store.remove(mode.elementId);
+      else this.store.dropped();
     };
     source.addEventListener('pointermove', move);
     source.addEventListener('pointerup', up);

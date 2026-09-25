@@ -122,7 +122,7 @@ export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
     const first = Math.min(...entries.map(([, a]) => a.first));
     const shift = quantizeShift(first, quantize);
     const brightness = irradianceBrightness(g.powerSum / g.hits, g.uMax - g.uMin + g.widthSum / g.hits);
-    const pan = Math.max(-0.8, Math.min(0.8, (r.pos.x / scene.table.w) * 2 - 1));
+    const pan = Math.max(-0.6, Math.min(0.6, ((r.pos.x / scene.table.w) * 2 - 1) * 0.8));
     for (const [deg, a] of entries) {
       // Average power per ray, so a degree sampled by two rays is not twice as loud.
       const p = a.power / a.rays;

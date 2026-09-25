@@ -10,9 +10,9 @@ import type { SceneModel } from '../scene/types';
 import type { VisualLayout } from '../timing/visual';
 import { Atmosphere } from './atmosphere';
 import { BeamLayer } from './beams/beam-layer';
-import { ElementViews } from './elements/element-views';
+import { createElementView, ElementViews } from './elements/element-views';
 import { Materials } from './elements/materials';
-import { TableFrame } from './frame';
+import { TableFrame, yawFor } from './frame';
 import { Gizmo } from './gizmo';
 import { Glows } from './glows';
 import { Table } from './table';
@@ -211,10 +211,48 @@ export class Renderer {
     this.atmosphere.setTree(tree);
   }
 
+  private ghost: THREE.Group | null = null;
+  private ghostDispose: (() => void) | null = null;
+
+  /** A translucent "place it here" hint for the tutorial, or null to clear it. */
+  setGhost(el: SceneModel['elements'][number] | null): void {
+    if (this.ghost) {
+      this.scene.remove(this.ghost);
+      this.ghostDispose?.();
+      this.ghost = null;
+    }
+    if (!el) return;
+    const view = createElementView({ ...el, enabled: false }, this.materials);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(view.radius - 0.06, view.radius, 96),
+      new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.015;
+    view.group.add(ring);
+    view.group.remove(view.pick);
+    this.frame.toWorld(el.pos, 0, view.group.position);
+    view.group.rotation.y = yawFor(el.rotation);
+    this.ghost = view.group;
+    this.ghost.userData.ring = ring;
+    this.ghostDispose = () => {
+      view.dispose();
+      ring.geometry.dispose();
+      ring.material.dispose();
+    };
+    this.scene.add(this.ghost);
+  }
+
   /** Musical energy 0…1 for the room to breathe with. */
   energy = 0;
 
   render(time: number, now: number): void {
+    if (this.ghost) {
+      const ring = this.ghost.userData.ring as THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+      const k = 0.5 + 0.5 * Math.sin(now * 3);
+      ring.material.opacity = 0.25 + 0.5 * k;
+      ring.scale.setScalar(1 + 0.06 * k);
+    }
     this.beams.update(time, now);
     this.atmosphere.update(time, this.pixelRatio, this.energy, this.size.x / Math.max(1, this.size.y), new THREE.Vector2(this.angles.azimuth, this.angles.polar - 0.66));
     this.finish.uniforms.uTime!.value = time;
@@ -222,6 +260,7 @@ export class Renderer {
   }
 
   dispose(): void {
+    this.setGhost(null);
     this.beams.dispose();
     this.atmosphere.dispose();
     this.glows.dispose();

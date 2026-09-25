@@ -102,7 +102,7 @@ export class Panels {
     }
 
     this.inspector = h('section.sl-panel.sl-inspector', { 'aria-label': 'Inspector' });
-    this.globals = h('section.sl-panel.sl-globals', { 'aria-label': 'Global settings' });
+    this.globals = h('details.sl-panel.sl-globals', { 'aria-label': 'Global settings' });
     this.side = h('aside.sl-side', {}, this.inspector, this.globals);
     this.renderGlobals();
     this.renderInspector(true);
@@ -182,7 +182,9 @@ export class Panels {
   }
 
   private renderGlobals(): void {
-    this.globals.replaceChildren(h('div.sl-panel-title', { text: 'Table' }));
+    const open = (this.globals as HTMLDetailsElement).open;
+    this.globals.replaceChildren(h('summary.sl-panel-title.sl-summary', {}, h('span', { text: 'Table' }), h('span.sl-summary-hint', { text: 'tempo · scale' })));
+    (this.globals as HTMLDetailsElement).open = open;
     const s = this.store.scene.settings;
     for (const field of GLOBAL_FIELDS) {
       this.globals.append(

@@ -30,8 +30,8 @@ interface ReceptorVoice {
 
 /** Filter cutoff for a receptor: diffuse light sounds warm, focused light bright. */
 export function cutoffFor(instrument: Instrument, brightness: number): number {
-  const base = instrument === 'pad' ? 700 : instrument === 'pluck' ? 1400 : 2200;
-  return base * 2 ** (brightness * 3);
+  const base = instrument === 'pad' ? 1300 : instrument === 'pluck' ? 2400 : 3600;
+  return Math.min(16000, base * 2 ** (brightness * 2.4));
 }
 
 /**
@@ -88,9 +88,9 @@ export class AudioEngine {
       return { input };
     };
     this.voices = {
-      pad: bus(0.5, 0.55, 0.05),
-      pluck: bus(0.8, 0.3, 0.22),
-      bell: bus(0.7, 0.5, 0.18),
+      pad: bus(0.85, 0.55, 0.05),
+      pluck: bus(1.3, 0.3, 0.22),
+      bell: bus(1.15, 0.5, 0.18),
     };
     this.master = master;
     this.nodes.push(limiter, comp, reverb, delay, dry, master);

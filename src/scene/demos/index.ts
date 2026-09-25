@@ -3,9 +3,11 @@ import { DEFAULT_SETTINGS, DEFAULT_TABLE, PARAMS } from '../defaults';
 import type { ElementKind, ElementOf, LoomNote, ScaleName, SceneElement, SceneModel, Subdivision, Vec2 } from '../types';
 
 const rad = (deg: number): number => (deg * Math.PI) / 180;
+/** Pitch class of D, the key of most demos. */
+const D = 2;
 
 /** Deterministic element builder for hand-authored demo scenes. */
-function el<K extends ElementKind>(kind: K, id: string, x: number, y: number, rotDeg: number, params: Partial<ElementOf<K>> = {}): ElementOf<K> {
+export function el<K extends ElementKind>(kind: K, id: string, x: number, y: number, rotDeg: number, params: Partial<ElementOf<K>> = {}): ElementOf<K> {
   return {
     ...(structuredClone(PARAMS[kind]) as object),
     id,
@@ -37,12 +39,22 @@ interface ChainOptions {
   receptor: { at: number; tilt?: number } & Partial<ElementOf<'receptor'>>;
 }
 
-function chain(o: ChainOptions): SceneElement[] {
-  const c = Math.cos(rad(o.heading));
-  const s = Math.sin(rad(o.heading));
-  const place = (lx: number, ly: number): [number, number] => [o.origin.x + lx * c - ly * s, o.origin.y + lx * s + ly * c];
+/** Positions along a spectrometer chain rooted at `origin`, heading `heading` degrees. */
+export function chainPoints(origin: Vec2, heading: number): {
+  place: (lx: number, ly: number) => [number, number];
+  alongFan: (L: number) => [number, number];
+  /** Direction of the dispersed fan, degrees. */
+  fan: number;
+} {
+  const c = Math.cos(rad(heading));
+  const s = Math.sin(rad(heading));
+  const place = (lx: number, ly: number): [number, number] => [origin.x + lx * c - ly * s, origin.y + lx * s + ly * c];
   const alongFan = (L: number): [number, number] => place(FAN_EXIT.x + L * Math.cos(rad(FAN_DIR)), FAN_EXIT.y + L * Math.sin(rad(FAN_DIR)));
-  const fan = FAN_DIR + o.heading;
+  return { place, alongFan, fan: FAN_DIR + heading };
+}
+
+function chain(o: ChainOptions): SceneElement[] {
+  const { place, alongFan, fan } = chainPoints(o.origin, o.heading);
   const out: SceneElement[] = [];
   out.push(el('emitter', `${o.id}-emitter`, ...place(0, 0), o.heading, { pulse: 'drone', ...o.emitter }));
   out.push(el('prism', `${o.id}-prism`, ...place(7, 0), 70 + o.heading, { size: 4 }));
@@ -62,7 +74,7 @@ function chain(o: ChainOptions): SceneElement[] {
 }
 
 /** Parse several voices into one card, all in the same scale-degree space. */
-function card(scale: ScaleName, root: number, octave: number, ...voices: string[]): { notes: LoomNote[]; steps: number } {
+export function card(scale: ScaleName, root: number, octave: number, ...voices: string[]): { notes: LoomNote[]; steps: number } {
   let steps = 0;
   const notes: LoomNote[] = [];
   for (const v of voices) {
@@ -71,6 +83,71 @@ function card(scale: ScaleName, root: number, octave: number, ...voices: string[
     steps = Math.max(steps, p.length);
   }
   return { notes, steps };
+}
+
+/* ------------------------------------------------------ Gymnopédie No. 1 */
+
+/*
+ * Satie, 1888. 3/4, one step per quarter. Four bars of the G–D rocking accompaniment,
+ * then the two opening phrases of the melody.
+ */
+const GYM_BASS = 'G2:3 | D2:3 | '.repeat(10);
+const GYM_CHORDS = '-:1 [B3 D4 F#4]:2 | -:1 [A3 C#4 F#4]:2 | '.repeat(10);
+const GYM_MELODY =
+  '-:12 | ' +
+  '-:1 F#5:1 A5:1 | G5:1 F#5:1 C#5:1 | B4:1 C#5:1 D5:1 | A4:3 | F#4:12 | ' +
+  '-:1 F#5:1 A5:1 | G5:1 F#5:1 C#5:1 | B4:1 C#5:1 D5:1 | A4:3 | C#5:3 | F#5:3 | E5:6 |';
+const gymAccomp = card('major', D, 2, GYM_BASS, GYM_CHORDS);
+const gymMelody = card('major', D, 4, GYM_MELODY);
+
+/** Build a light path that bounces between mirrors: returns the mirrors and the end pose. */
+function mirrorPath(start: Vec2, legs: { heading: number; length: number }[], mirrorLength: number, idPrefix: string): { mirrors: SceneElement[]; end: Vec2; heading: number } {
+  const mirrors: SceneElement[] = [];
+  let p = { ...start };
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]!;
+    p = { x: p.x + Math.cos(rad(leg.heading)) * leg.length, y: p.y + Math.sin(rad(leg.heading)) * leg.length };
+    const next = legs[i + 1];
+    if (!next) break;
+    // The mirror's normal bisects the turn: it points along (out − in).
+    const nx = Math.cos(rad(next.heading)) - Math.cos(rad(leg.heading));
+    const ny = Math.sin(rad(next.heading)) - Math.sin(rad(leg.heading));
+    mirrors.push(el('mirror', `${idPrefix}-${i + 1}`, p.x, p.y, (Math.atan2(ny, nx) * 180) / Math.PI, { length: mirrorLength, reflectance: 0.96 }));
+  }
+  return { mirrors, end: p, heading: legs[legs.length - 1]!.heading };
+}
+
+function gymnopedie(): SceneElement[] {
+  // Melody: emitter → prism → loom card → lens that collimates the fan into a parallel
+  // rainbow ribbon → four mirrors → bell receptor.
+  const M = chainPoints({ x: 3, y: 3 }, 62);
+  const lensAt = M.alongFan(8);
+  const ribbon = mirrorPath(
+    { x: lensAt[0], y: lensAt[1] },
+    [
+      { heading: 22, length: 11 },
+      { heading: -70, length: 10 },
+      { heading: 20, length: 9 },
+      { heading: 75, length: 8.5 },
+    ],
+    6.5,
+    'gym-mirror',
+  );
+  return [
+    el('emitter', 'gym-melody-emitter', 3, 3, 62, { pulse: 'drone' }),
+    el('prism', 'gym-melody-prism', ...M.place(7, 0), 70 + 62, { size: 4 }),
+    el('loom', 'gym-melody-loom', ...M.alongFan(4), M.fan, { length: 3, subdivision: '1/4', title: 'Gymnopédie — melody', depth: 0.9, ...gymMelody }),
+    el('lens', 'gym-lens', ...lensAt, M.fan, { focal: 9, aperture: 5 }),
+    ...ribbon.mirrors,
+    el('receptor', 'gym-melody-receptor', ribbon.end.x, ribbon.end.y, ribbon.heading + 180, { aperture: 6.5, instrument: 'bell', octave: 4, span: 2, voices: 2, gain: 0.85 }),
+    ...chain({
+      id: 'gym-accomp',
+      origin: { x: 3, y: 22 },
+      heading: 30,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/4', title: 'Gymnopédie — accompaniment', ...gymAccomp },
+      receptor: { at: 12, tilt: 12, aperture: 7, instrument: 'pad', octave: 2, span: 3, voices: 4, gain: 0.7 },
+    }),
+  ];
 }
 
 export interface DemoScene {
@@ -87,7 +164,6 @@ function scene(name: string, elements: SceneElement[], settings: Partial<SceneMo
 
 /* ------------------------------------------------------------------ Ode to Joy */
 
-const D = 2;
 const ODE_A = 'F#4:2 F#4:2 G4:2 A4:2 | A4:2 G4:2 F#4:2 E4:2 | D4:2 D4:2 E4:2 F#4:2 | F#4:3 E4:1 E4:4 |';
 const ODE_A2 = 'F#4:2 F#4:2 G4:2 A4:2 | A4:2 G4:2 F#4:2 E4:2 | D4:2 D4:2 E4:2 F#4:2 | E4:3 D4:1 D4:4 |';
 const ODE_B = 'E4:2 E4:2 F#4:2 D4:2 | E4:2 F#4:1 G4:1 F#4:2 D4:2 | E4:2 F#4:1 G4:1 F#4:2 E4:2 | D4:2 E4:2 A3:4 |';
@@ -130,6 +206,13 @@ const preludeArp = card('major', 0, 3, PRELUDE);
 const preludeBass = card('major', 0, 1, PRELUDE_BASS);
 
 export const DEMO_SCENES: DemoScene[] = [
+  {
+    id: 'gymnopedie',
+    title: 'Gymnopédie No. 1',
+    subtitle: 'Erik Satie',
+    blurb: 'A lens straightens the melody’s rainbow into a ribbon that folds across the table on four mirrors; the rocking chords strum below.',
+    scene: scene('Gymnopédie No. 1', gymnopedie(), { bpm: 76, beatsPerBar: 3, scale: 'major', root: D, quantize: 1, raysPerSplit: 28 }),
+  },
   {
     id: 'ode',
     title: 'Ode to Joy',
