@@ -25,6 +25,21 @@ describe('classical scores', () => {
   });
 });
 
+describe('lens', () => {
+  it('focused light sounds brighter and louder than diffuse light', () => {
+    const scene = DEMO_SCENES.find((d) => d.id === 'prelude')!.scene;
+    const plan = planNotes(scene, trace(scene));
+    const focused = plan.filter((t) => t.receptorId === 'arp-receptor');
+    const diffuse = plan.filter((t) => t.receptorId === 'bass-receptor');
+    expect(focused[0]!.brightness).toBeGreaterThan(0.5);
+    expect(diffuse[0]!.brightness).toBeLessThan(0.1);
+    // Removing the lens makes the arpeggio receptor dull (or lose light entirely).
+    const noLens = { ...scene, elements: scene.elements.filter((e) => e.kind !== 'lens') };
+    const plain = planNotes(noLens, trace(noLens)).filter((t) => t.receptorId === 'arp-receptor');
+    expect(plain.every((t) => t.brightness < focused[0]!.brightness)).toBe(true);
+  });
+});
+
 describe('demo scenes', () => {
   for (const demo of DEMO_SCENES) {
     describe(demo.title, () => {

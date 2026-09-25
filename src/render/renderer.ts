@@ -148,8 +148,10 @@ export class Renderer {
   adaptResolution(frameMs: number): void {
     if (new URLSearchParams(location.search).has('fixedres')) return;
     let next = this.pixelRatio;
-    if (frameMs > 22 && this.pixelRatio > 0.75) next = Math.max(0.75, this.pixelRatio - 0.25);
-    else if (frameMs < 12 && this.pixelRatio < this.basePixelRatio) next = Math.min(this.basePixelRatio, this.pixelRatio + 0.25);
+    // Never render below the display's CSS resolution: a soft image is worse than 45 fps.
+    const floor = Math.min(1, this.basePixelRatio);
+    if (frameMs > 24 && this.pixelRatio > floor) next = Math.max(floor, this.pixelRatio - 0.25);
+    else if (frameMs < 13 && this.pixelRatio < this.basePixelRatio) next = Math.min(this.basePixelRatio, this.pixelRatio + 0.25);
     if (next === this.pixelRatio) return;
     this.pixelRatio = next;
     this.renderer.setPixelRatio(next);

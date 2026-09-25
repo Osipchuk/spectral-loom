@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
   root: 2,
   c: 4,
   quantize: 0.7,
-  dispersion: 10,
+  dispersion: 12,
   masterDb: -4,
   gridSnap: true,
   raysPerSplit: 24,

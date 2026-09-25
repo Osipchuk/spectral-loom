@@ -119,6 +119,85 @@
   outline: 1px solid var(--sl-accent);
 }
 
+.sl-root .sl-palette-btn {
+  position: relative;
+}
+.sl-root .sl-tip {
+  position: absolute;
+  left: calc(100% + 14px);
+  top: 50%;
+  transform: translate(-4px, -50%);
+  width: 260px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(12, 13, 18, 0.94);
+  border: 1px solid var(--sl-line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  color: var(--sl-fg-dim);
+  font: 400 11.5px/1.5 var(--sl-sans);
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+  z-index: 5;
+  cursor: default;
+}
+.sl-root .sl-palette-btn:hover .sl-tip,
+.sl-root .sl-palette-btn:focus-visible .sl-tip {
+  opacity: 1;
+  transform: translate(0, -50%);
+  transition-delay: 0.25s;
+}
+.sl-root .sl-tip-title {
+  font: italic 400 15px/1.2 var(--sl-serif);
+  color: var(--sl-fg);
+}
+.sl-root .sl-tip-row b {
+  font: 500 9.5px/1 var(--sl-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sl-accent);
+  margin-right: 4px;
+}
+.sl-root .sl-tip-foot {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--sl-fg-faint);
+}
+.sl-root .sl-about {
+  margin: -4px 0 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--sl-fg-faint);
+}
+.sl-root .sl-about-music {
+  color: var(--sl-fg-dim);
+}
+
+/* ---------- note labels ---------- */
+.sl-root .sl-notes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.sl-root .sl-note {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 5px;
+  border-radius: 999px;
+  font: 500 10px/1 var(--sl-mono);
+  color: #e8ecf5;
+  background: rgba(8, 9, 12, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+
 /* ---------- side ---------- */
 .sl-root .sl-side {
   position: absolute;

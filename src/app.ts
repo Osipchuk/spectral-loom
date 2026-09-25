@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { AudioEngine } from './audio/engine';
 import { renderWav } from './audio/export';
 import { ENVELOPES, envelopeAt } from './audio/instruments';
-import { lightToDegree } from './music/pitch';
+import { degreeToMidi, lightToDegree } from './music/pitch';
+import { lightToRGB } from './render/spectral-color';
+import { NoteLabels, type NoteLabel } from './ui/note-labels';
+import { AUDIO_THRESHOLD } from './timing/arrivals';
 import { trace } from './optics/tracer';
 import type { RayTree } from './optics/types';
 import { dot, fromAngle, perp, sub } from './optics/vec2';
@@ -61,6 +64,7 @@ export class App {
   private pulseTexture = new PulseTexture();
   /** Longest light travel time in the scene, seconds: how far back pulses stay visible. */
   private maxDelayS = 0;
+  private noteLabels = new NoteLabels();
   /** Silent clock that animates light before audio is started. */
   private previewClock: BeatClock;
 
@@ -115,7 +119,7 @@ export class App {
       html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>space</kbd> play',
     });
     this.overlay = this.buildOverlay();
-    this.root.append(title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
+    this.root.append(this.noteLabels.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
     this.root.addEventListener('keydown', this.onKey);
@@ -235,6 +239,31 @@ export class App {
       this.maxDelayS = Math.max(this.maxDelayS, (g.sStart + g.length - g.pulseOriginS) / cs + Math.max(0, w));
     }
     this.renderer.setTree(this.tree, now, this.dirty.crossfade, this.visual);
+    this.noteLabels.set(this.computeNoteLabels(this.tree), (p, y) => this.renderer.frame.toWorld(p, y));
+  }
+
+  /** One label per pitch per receptor, where that colour's light lands on the slit. */
+  private computeNoteLabels(tree: RayTree): NoteLabel[] {
+    const scene = this.store.scene;
+    const acc = new Map<string, { label: NoteLabel; n: number; u: number }>();
+    for (const hit of tree.receptorHits) {
+      const r = this.store.get(hit.receptorId);
+      if (r?.kind !== 'receptor' || !r.enabled || hit.bounces > 0 || hit.intensity < AUDIO_THRESHOLD) continue;
+      const deg = lightToDegree(hit.light, { scale: scene.settings.scale, span: r.span });
+      const midi = degreeToMidi(deg, { scale: scene.settings.scale, root: scene.settings.root, octave: r.octave, span: r.span });
+      const seg = tree.segments[hit.segmentId]!;
+      const key = `${r.id}|${midi}`;
+      const a = acc.get(key);
+      if (a) {
+        a.label.at = { x: (a.label.at.x * a.n + seg.end.x) / (a.n + 1), y: (a.label.at.y * a.n + seg.end.y) / (a.n + 1) };
+        a.u = (a.u * a.n + hit.u) / (a.n + 1);
+        a.n += 1;
+      } else {
+        const back = fromAngle(r.rotation + Math.PI);
+        acc.set(key, { label: { receptorId: r.id, midi, at: { ...seg.end }, back, rgb: lightToRGB(hit.light) }, n: 1, u: hit.u });
+      }
+    }
+    return [...acc.values()].sort((a, b) => (a.label.receptorId === b.label.receptorId ? a.u - b.u : a.label.receptorId < b.label.receptorId ? -1 : 1)).map((a) => a.label);
   }
 
   private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
@@ -291,6 +320,7 @@ export class App {
     this.renderer.gizmo.setHover(hov ?? null, hov ? (this.renderer.views.get(hov.id)?.radius ?? 1) : 1);
 
     this.renderer.render(wall, wall);
+    this.noteLabels.update(this.renderer.camera, this.canvas.clientWidth, this.canvas.clientHeight, this.engine.recentNotes(), heard);
     this.updateStats(wall);
     this.schedule();
   };
@@ -305,6 +335,9 @@ export class App {
     const s = this.store.scene.settings;
     shared.uAudioTime!.value = time;
     shared.uLightSpeed!.value = (s.c * s.bpm) / 60;
+    // While music plays the base glow drops so swells stand out; paused beams stay bright.
+    const base = shared.uBase!.value as number;
+    shared.uBase!.value = base + ((clock ? 0.4 : 0.62) - base) * 0.08;
     if (!clock) {
       shared.uPulsesOn!.value = 0;
       return;

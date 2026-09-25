@@ -20,11 +20,11 @@ function el<K extends ElementKind>(kind: K, id: string, x: number, y: number, ro
 /*
  * The spectrometer "chain": emitter → prism → (loom card) → (lens) → receptor, authored in
  * a local frame where the emitter sits at the origin shooting along +x. With the prism at
- * 70° and dispersion 10×, the fan leaves the prism at FAN_EXIT heading FAN_DIR (measured
- * with the tracer) and spreads ~16°. Rotating the chain as a whole keeps the optics intact.
+ * 70° and dispersion 12×, the fan leaves the prism at FAN_EXIT heading FAN_DIR (measured
+ * with the tracer) and spreads ~19°. Rotating the chain as a whole keeps the optics intact.
  */
 const FAN_EXIT = { x: 8.37, y: -1.15 };
-const FAN_DIR = -39.48;
+const FAN_DIR = -39.61;
 
 interface ChainOptions {
   id: string;
@@ -143,14 +143,14 @@ export const DEMO_SCENES: DemoScene[] = [
           origin: { x: 2, y: 25.5 },
           heading: 0,
           loom: { at: 4.5, length: 3.2, subdivision: '1/8', title: 'Ode — harmony', ...odeChords },
-          receptor: { at: 12, tilt: 14, aperture: 5.5, instrument: 'pad', octave: 2, span: 2, voices: 4, gain: 0.75 },
+          receptor: { at: 12, tilt: 14, aperture: 7, instrument: 'pad', octave: 2, span: 2, voices: 4, gain: 0.75 },
         }),
         ...chain({
           id: 'melody',
           origin: { x: 46, y: 2.5 },
           heading: 180,
           loom: { at: 4.5, length: 3.2, subdivision: '1/8', title: 'Ode — melody', ...odeMelody },
-          receptor: { at: 12, aperture: 5.5, instrument: 'pluck', octave: 3, span: 2, voices: 2, gain: 0.95 },
+          receptor: { at: 12, aperture: 7, instrument: 'pluck', octave: 3, span: 2, voices: 2, gain: 0.95 },
         }),
       ],
       { bpm: 104, scale: 'major', root: D, quantize: 1, raysPerSplit: 28 },
@@ -169,14 +169,14 @@ export const DEMO_SCENES: DemoScene[] = [
           origin: { x: 2, y: 24 },
           heading: 0,
           loom: { at: 4.5, length: 3.2, subdivision: '1/8', title: 'Canon — ground', ...canonChords },
-          receptor: { at: 12.5, tilt: 22, aperture: 6, instrument: 'pad', octave: 2, span: 2, voices: 4, gain: 0.7 },
+          receptor: { at: 12.5, tilt: 22, aperture: 7.5, instrument: 'pad', octave: 2, span: 2, voices: 4, gain: 0.7 },
         }),
         ...chain({
           id: 'violin',
           origin: { x: 24, y: 24 },
           heading: -20,
           loom: { at: 4.5, length: 3.2, subdivision: '1/8', title: 'Canon — violin', ...canonMelody },
-          receptor: { at: 12.5, aperture: 6, instrument: 'bell', octave: 4, span: 3, voices: 2, gain: 0.8 },
+          receptor: { at: 12.5, aperture: 7, instrument: 'bell', octave: 4, span: 3, voices: 2, gain: 0.8 },
         }),
       ],
       { bpm: 68, scale: 'major', root: D, quantize: 1, raysPerSplit: 28 },
@@ -203,7 +203,7 @@ export const DEMO_SCENES: DemoScene[] = [
           origin: { x: 24, y: 26 },
           heading: -8,
           loom: { at: 4.5, length: 3.2, subdivision: '1/16', title: 'Prelude — bass', ...preludeBass },
-          receptor: { at: 12, aperture: 5.5, instrument: 'pad', octave: 1, span: 3, voices: 2, gain: 0.6 },
+          receptor: { at: 12, aperture: 7, instrument: 'pad', octave: 1, span: 3, voices: 2, gain: 0.6 },
         }),
       ],
       { bpm: 66, scale: 'major', root: 0, quantize: 1, raysPerSplit: 32 },

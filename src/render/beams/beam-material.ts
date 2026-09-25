@@ -77,6 +77,7 @@ uniform float uAudioTime;
 uniform float uLightSpeed;
 uniform float uPulsesOn;
 uniform sampler2D uPulses;
+uniform sampler2D uNoise;
 uniform vec4 uEnv[4];
 varying float vEnv;
 varying float vT;
@@ -86,7 +87,6 @@ varying vec3 vColor;
 varying vec4 vParams;
 varying vec4 vPulse;
 varying vec3 vWorld;
-${SIMPLEX_GLSL}
 
 // Same shape as envelopeAt() in audio/instruments.ts: linear attack, exponential decay
 // to sustain, exponential release. Plateaus (merged fast pulses) hold at full level.
@@ -108,14 +108,23 @@ float swellAt(float s) {
   vec4 e = uEnv[int(floor(vEnv + 0.5))];
   float delay = (s - vPulse.y) / uLightSpeed + vPulse.w * vT;
   float tau = uAudioTime - delay;
+  int row = int(ch);
+  // Pulses are sorted by launch time: binary-search the last one launched before tau,
+  // then look back over a few recent ones. Keeps the per-pixel cost at ~10 fetches.
+  int lo = 0;
+  int hi = ${PULSES_PER_CHANNEL};
+  for (int k = 0; k < 7; k++) {
+    if (lo >= hi) break;
+    int mid = (lo + hi) / 2;
+    vec4 p = texelFetch(uPulses, ivec2(mid, row), 0);
+    if (p.w > 0.5 && p.x <= tau) lo = mid + 1; else hi = mid;
+  }
   float E = 0.0;
-  for (int i = 0; i < ${PULSES_PER_CHANNEL}; i++) {
-    vec4 p = texelFetch(uPulses, ivec2(i, int(ch)), 0);
-    if (p.w < 0.5) break;
-    float dt = tau - p.x;
-    if (dt < 0.0) break;
-    if (dt > p.y + e.w * 7.0) continue;
-    E = max(E, envAt(e, p.y, dt, p.z < 0.0) * abs(p.z));
+  for (int j = 1; j <= 4; j++) {
+    int i = lo - j;
+    if (i < 0) break;
+    vec4 p = texelFetch(uPulses, ivec2(i, row), 0);
+    E = max(E, envAt(e, p.y, tau - p.x, p.z < 0.0) * abs(p.z));
   }
   return E;
 }
@@ -131,36 +140,84 @@ void main() {
   // Never dark: a base glow plus the swell, base + depth ≤ 1 by construction.
   float level = uBase + (1.0 - uBase) * E;
 
-  // Slow drifting density field: light scattering in slightly hazy air.
-  float n1 = snoise(vWorld * 0.9 + vec3(0.0, uTime * 0.07, uTime * 0.05));
-  float n2 = snoise(vWorld * 3.1 - vec3(uTime * 0.11, 0.0, uTime * 0.04));
-  float haze = clamp(0.8 + 0.35 * n1 + 0.15 * n2, 0.25, 1.6);
+  // Slow drifting density field (tileable noise texture): light in slightly hazy air.
+  vec2 q = vWorld.xz;
+  float n1 = texture2D(uNoise, q * 0.045 + vec2(uTime * 0.004, uTime * 0.003)).r;
+  float n2 = texture2D(uNoise, q * 0.16 - vec2(uTime * 0.011, -uTime * 0.006)).r;
+  float haze = clamp(0.45 + 0.8 * n1 + 0.35 * n2, 0.3, 1.6);
 
   if (uMode < 0.5) {
     float x = vOffset / w;
     float core = exp(-x * x * 7.0);
     // Glow scales with the beam's own width so neighbouring fan rays keep their colour.
     // The swell also widens the glow, so it reads as breathing rather than blinking.
-    float glow = exp(-x * x * 0.9 / (1.0 + 1.6 * E));
-    // Wide, faint scatter halo: what makes the beam read as light in hazy air.
+    float glow = exp(-x * x * 0.9 / (1.0 + 2.5 * E));
     float halo = exp(-abs(vOffset) / (0.09 + w * 0.8));
-    vec3 c = vColor * radiance * level * (core * 1.6 + glow * (0.2 + 0.35 * E) * haze) + vColor * halo * (0.06 + 0.12 * E) * haze * level * min(vParams.x * 6.0, 1.0);
-    // Very bright cores desaturate towards white, like an overexposed laser line.
-    c += vec3(core * max(radiance * level - 1.3, 0.0) * 0.25);
+    vec3 c = vColor * radiance * level * (core * (1.3 + 1.1 * E) + glow * (0.16 + 0.55 * E) * haze);
+    c += vColor * halo * (0.05 + 0.2 * E) * haze * level * min(vParams.x * 6.0, 1.0);
+    // Bright cores desaturate towards white, like an overexposed laser line.
+    c += vec3(core * (max(radiance * level - 1.3, 0.0) * 0.25 + E * E * 0.35 * min(radiance, 1.5)));
     gl_FragColor = vec4(c * uGain, 1.0);
   } else {
     float r = 0.35 + w * 1.5;
     float spill = exp(-vOffset * vOffset / (r * r));
     float energy = vParams.x * level * min(${BASE_WIDTH.toFixed(3)} / max(w, 0.22), 1.0);
-    gl_FragColor = vec4(vColor * energy * spill * 0.075 * mix(0.7, 1.2, haze) * uGain, 1.0);
+    gl_FragColor = vec4(vColor * energy * spill * (0.06 + 0.1 * E) * mix(0.7, 1.2, haze) * uGain, 1.0);
   }
 }`;
 
-export type BeamSharedUniforms = Record<'uAudioTime' | 'uLightSpeed' | 'uPulsesOn' | 'uPulses' | 'uEnv' | 'uBase', THREE.IUniform>;
+/** Tileable value noise, a few octaves, built once and shared by all beams. */
+let noiseTexture: THREE.DataTexture | null = null;
+export function hazeNoiseTexture(): THREE.DataTexture {
+  if (noiseTexture) return noiseTexture;
+  const N = 128;
+  const data = new Uint8Array(N * N * 4);
+  let seed = 12345;
+  const rand = (): number => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  const acc = new Float32Array(N * N);
+  let amp = 1;
+  let total = 0;
+  for (const cells of [4, 8, 16, 32]) {
+    const grid = Array.from({ length: cells * cells }, rand);
+    const g = (x: number, y: number): number => grid[((y + cells) % cells) * cells + ((x + cells) % cells)]!;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const fx = (x / N) * cells;
+        const fy = (y / N) * cells;
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const sx = tx * tx * (3 - 2 * tx);
+        const sy = ty * ty * (3 - 2 * ty);
+        const v = (g(x0, y0) * (1 - sx) + g(x0 + 1, y0) * sx) * (1 - sy) + (g(x0, y0 + 1) * (1 - sx) + g(x0 + 1, y0 + 1) * sx) * sy;
+        acc[y * N + x]! += v * amp;
+      }
+    }
+    total += amp;
+    amp *= 0.5;
+  }
+  for (let i = 0; i < N * N; i++) {
+    const v = Math.round((acc[i]! / total) * 255);
+    data.set([v, v, v, 255], i * 4);
+  }
+  noiseTexture = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+  noiseTexture.wrapS = noiseTexture.wrapT = THREE.RepeatWrapping;
+  noiseTexture.magFilter = THREE.LinearFilter;
+  noiseTexture.minFilter = THREE.LinearFilter;
+  noiseTexture.needsUpdate = true;
+  return noiseTexture;
+}
+
+export type BeamSharedUniforms = Record<'uAudioTime' | 'uLightSpeed' | 'uPulsesOn' | 'uPulses' | 'uEnv' | 'uBase' | 'uNoise', THREE.IUniform>;
 
 export function createSharedUniforms(): BeamSharedUniforms {
   return {
-    uBase: { value: 0.55 },
+    uBase: { value: 0.42 },
+    uNoise: { value: hazeNoiseTexture() },
     uAudioTime: { value: 0 },
     uLightSpeed: { value: 6 },
     uPulsesOn: { value: 0 },

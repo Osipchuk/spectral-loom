@@ -12,7 +12,7 @@ import { centroidNm, filterLight, sampleBand, WHITE, type RayLight } from './spe
 import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit, type TraceOptions } from './types';
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
 
-export const EMITTER_BEAM_WIDTH = 0.16;
+export const EMITTER_BEAM_WIDTH = 0.26;
 
 interface RayState {
   o: Vec2;

@@ -15,9 +15,23 @@ export interface ScheduledNote extends NoteEvent {
   holdS: number;
 }
 
-interface Voice {
+/** Shared per-instrument bus: level plus reverb and delay sends. */
+interface Bus {
+  input: Tone.Gain;
+}
+
+/** Each receptor has its own synth, tone filter and stereo position. */
+interface ReceptorVoice {
+  instrument: Instrument;
   synth: Tone.PolySynth;
-  out: Tone.ToneAudioNode;
+  filter: Tone.Filter;
+  panner: Tone.Panner;
+}
+
+/** Filter cutoff for a receptor: diffuse light sounds warm, focused light bright. */
+export function cutoffFor(instrument: Instrument, brightness: number): number {
+  const base = instrument === 'pad' ? 700 : instrument === 'pluck' ? 1400 : 2200;
+  return base * 2 ** (brightness * 3);
 }
 
 /**
@@ -27,7 +41,8 @@ interface Voice {
  */
 export class AudioEngine {
   readonly clock: BeatClock;
-  private voices: Record<Instrument, Voice> | null = null;
+  private voices: Record<Instrument, Bus> | null = null;
+  private receptorVoices = new Map<string, ReceptorVoice>();
   private nodes: Tone.ToneAudioNode[] = [];
   private master: Tone.Volume | null = null;
   private interval: number | null = null;
@@ -62,53 +77,20 @@ export class AudioEngine {
     const delay = new Tone.PingPongDelay({ delayTime: '8n.', feedback: 0.28, wet: 1 }).connect(reverb);
     const dry = new Tone.Gain(1).connect(comp);
 
-    const bus = (synth: Tone.PolySynth, level: number, reverbSend: number, delaySend: number, pre?: Tone.ToneAudioNode): Voice => {
-      const vol = new Tone.Gain(level);
-      if (pre) {
-        synth.connect(pre);
-        pre.connect(vol);
-      } else {
-        synth.connect(vol);
-      }
-      vol.connect(dry);
+    const bus = (level: number, reverbSend: number, delaySend: number): Bus => {
+      const input = new Tone.Gain(level);
+      input.connect(dry);
       const r = new Tone.Gain(reverbSend).connect(reverb);
       const d = new Tone.Gain(delaySend).connect(delay);
-      vol.connect(r);
-      vol.connect(d);
-      this.nodes.push(vol, r, d);
-      if (pre) this.nodes.push(pre);
-      return { synth, out: vol };
+      input.connect(r);
+      input.connect(d);
+      this.nodes.push(input, r, d);
+      return { input };
     };
-
-    const pad = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'fatsawtooth', count: 3, spread: 22 },
-      envelope: { ...ENVELOPES.pad },
-    });
-    pad.maxPolyphony = 24;
-    const padFilter = new Tone.Filter({ type: 'lowpass', frequency: 1500, Q: 0.4, rolloff: -24 });
-
-    const pluck = new Tone.PolySynth(Tone.MonoSynth, {
-      oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
-      envelope: { ...ENVELOPES.pluck },
-      filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
-      filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
-    });
-    pluck.maxPolyphony = 24;
-
-    const bell = new Tone.PolySynth(Tone.FMSynth, {
-      harmonicity: 3.01,
-      modulationIndex: 11,
-      oscillator: { type: 'sine' },
-      modulation: { type: 'sine' },
-      envelope: { ...ENVELOPES.bell },
-      modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
-    });
-    bell.maxPolyphony = 24;
-
     this.voices = {
-      pad: bus(pad, 0.55, 0.55, 0.05, padFilter),
-      pluck: bus(pluck, 0.85, 0.3, 0.22),
-      bell: bus(bell, 0.75, 0.5, 0.18),
+      pad: bus(0.5, 0.55, 0.05),
+      pluck: bus(0.8, 0.3, 0.22),
+      bell: bus(0.7, 0.5, 0.18),
     };
     this.master = master;
     this.nodes.push(limiter, comp, reverb, delay, dry, master);
@@ -117,6 +99,32 @@ export class AudioEngine {
   setPlan(templates: NoteTemplate[], sources: Map<string, PulseSource>): void {
     this.templates = templates;
     this.sources = sources;
+    // Retire voices of receptors that no longer receive light (let their tails ring out).
+    const live = new Set(templates.map((t) => `${t.receptorId}|${t.instrument}`));
+    for (const [id, v] of this.receptorVoices) {
+      if (live.has(`${id}|${v.instrument}`)) continue;
+      this.receptorVoices.delete(id);
+      const dispose = (): void => {
+        v.synth.dispose();
+        v.filter.dispose();
+        v.panner.dispose();
+      };
+      if (Tone.getContext().rawContext instanceof OfflineAudioContext) dispose();
+      else window.setTimeout(dispose, 6000);
+    }
+  }
+
+  private voiceFor(receptorId: string, instrument: Instrument): ReceptorVoice | null {
+    if (!this.voices) return null;
+    const existing = this.receptorVoices.get(receptorId);
+    if (existing && existing.instrument === instrument) return existing;
+    const synth = createSynth(instrument);
+    const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12 });
+    const panner = new Tone.Panner(0);
+    synth.chain(filter, panner, this.voices[instrument].input);
+    const v = { instrument, synth, filter, panner };
+    this.receptorVoices.set(receptorId, v);
+    return v;
   }
 
   setMasterDb(db: number): void {
@@ -146,7 +154,7 @@ export class AudioEngine {
     if (this.interval !== null) Tone.getContext().clearInterval(this.interval);
     this.interval = null;
     const now = this.contextTime();
-    for (const v of Object.values(this.voices ?? {})) v.synth.releaseAll(now);
+    for (const v of this.receptorVoices.values()) v.synth.releaseAll(now);
     this.recent = [];
   }
 
@@ -171,7 +179,11 @@ export class AudioEngine {
       const time = this.clock.timeAt(e.beat);
       if (time < now) continue;
       const holdS = holdSeconds(e.instrument, e.lenBeats * this.clock.secondsPerBeat);
-      this.voices[e.instrument].synth.triggerAttackRelease(midiToFrequency(e.midi), holdS, time, e.velocity);
+      const v = this.voiceFor(e.receptorId, e.instrument);
+      if (!v) continue;
+      v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, e.brightness), Math.max(now, time - 0.05), 0.08);
+      v.panner.pan.setTargetAtTime(e.pan, Math.max(now, time - 0.05), 0.1);
+      v.synth.triggerAttackRelease(midiToFrequency(e.midi), holdS, time, e.velocity);
       this.recent.push({ ...e, time, holdS });
     }
     const horizon = now - 8;
@@ -204,9 +216,45 @@ export class AudioEngine {
 
   dispose(): void {
     this.pause();
-    if (this.voices) for (const v of Object.values(this.voices)) v.synth.dispose();
+    for (const v of this.receptorVoices.values()) {
+      v.synth.dispose();
+      v.filter.dispose();
+      v.panner.dispose();
+    }
+    this.receptorVoices.clear();
     for (const n of this.nodes) n.dispose();
     this.nodes = [];
     this.voices = null;
   }
+}
+
+function createSynth(instrument: Instrument): Tone.PolySynth {
+  if (instrument === 'pad') {
+    const pad = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'fatsawtooth', count: 3, spread: 22 },
+      envelope: { ...ENVELOPES.pad },
+    });
+    pad.maxPolyphony = 12;
+    return pad;
+  }
+  if (instrument === 'pluck') {
+    const pluck = new Tone.PolySynth(Tone.MonoSynth, {
+      oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
+      envelope: { ...ENVELOPES.pluck },
+      filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
+      filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
+    });
+    pluck.maxPolyphony = 12;
+    return pluck;
+  }
+  const bell = new Tone.PolySynth(Tone.FMSynth, {
+    harmonicity: 3.01,
+    modulationIndex: 11,
+    oscillator: { type: 'sine' },
+    modulation: { type: 'sine' },
+    envelope: { ...ENVELOPES.bell },
+    modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
+  });
+  bell.maxPolyphony = 12;
+  return bell;
 }

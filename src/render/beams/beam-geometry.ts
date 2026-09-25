@@ -6,7 +6,7 @@ import type { VisualLayout } from '../../timing/visual';
 import { BEAM_HEIGHT, type TableFrame } from '../frame';
 
 /** Reference width that maps intensity 1 to radiance 1. */
-export const BASE_WIDTH = 0.16;
+export const BASE_WIDTH = 0.26;
 export const MIN_WIDTH = 0.05;
 
 /**
@@ -73,8 +73,9 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
       sp0 * fanFill,
       sp1 * fanFill,
     );
-    // Quad half-extent covers the soft halo, which is proportional to width plus a fixed glow.
-    const extent = wMax * 2.6 + 0.3;
+    // Quad half-extent covers the soft halo. Fan rays overlap their neighbours, so they get
+    // a tight quad (the fan as a whole provides the glow) to keep overdraw low.
+    const extent = g.group ? wMax * 2.4 + 0.08 : wMax * 2.6 + 0.3;
     const rgb = lightToRGB(g.light);
     const vis = opts.visual?.segments.get(g.id) ?? { channel: -1, warp: 0, env: 0 };
 

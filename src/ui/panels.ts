@@ -1,6 +1,7 @@
 import type { SceneStore } from '../scene/store';
 import type { ElementKind, SceneElement } from '../scene/types';
 import { h, svgIcon } from './dom';
+import { ELEMENT_INFO } from './info';
 import { ELEMENT_FIELDS, GLOBAL_FIELDS, KIND_LABELS, type Field, type FieldValue } from './params';
 
 export const ICONS: Record<ElementKind, string> = {
@@ -76,12 +77,22 @@ export class Panels {
   ) {
     this.palette = h('nav.sl-panel.sl-palette', { 'aria-label': 'Elements' });
     for (const kind of PALETTE_ORDER) {
+      const info = ELEMENT_INFO[kind];
       const btn = h(
         'button.sl-palette-btn',
-        { type: 'button', title: `Drag onto the table: ${KIND_LABELS[kind]}` },
+        { type: 'button', 'aria-label': `${KIND_LABELS[kind]}: ${info.light}` },
         svgIcon(ICONS[kind]),
         h('span.sl-palette-label', { text: KIND_LABELS[kind] }),
+        h(
+          'span.sl-tip',
+          { role: 'tooltip' },
+          h('span.sl-tip-title', { text: KIND_LABELS[kind] }),
+          h('span.sl-tip-row', {}, h('b', { text: 'Light ' }), info.light),
+          h('span.sl-tip-row', {}, h('b', { text: 'Music ' }), info.music),
+          h('span.sl-tip-foot', { text: 'Drag onto the table, or click to drop it in the middle.' }),
+        ),
       );
+      btn.dataset.kind = kind;
       btn.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -143,6 +154,8 @@ export class Panels {
       h('span', { text: KIND_LABELS[el.kind] }),
       h('span.sl-badge', { text: el.enabled ? 'on' : 'off', 'data-on': String(el.enabled) }),
     );
+    const info = ELEMENT_INFO[el.kind];
+    const about = h('p.sl-about', {}, h('span.sl-about-light', { text: info.light }), ' ', h('span.sl-about-music', { text: info.music }));
     const body = h('div.sl-fields');
     const rebuild = (): void => {
       body.replaceChildren();
@@ -165,7 +178,7 @@ export class Panels {
       h('button.sl-btn', { type: 'button', text: el.enabled ? 'Disable' : 'Enable', onclick: () => this.cb.onToggle(el.id) }),
       h('button.sl-btn.sl-btn-danger', { type: 'button', text: 'Delete', onclick: () => this.cb.onDelete(el.id) }),
     );
-    return h('div', {}, title, body, actions);
+    return h('div', {}, title, about, body, actions);
   }
 
   private renderGlobals(): void {
