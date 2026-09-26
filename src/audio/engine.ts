@@ -239,6 +239,17 @@ export class AudioEngine {
     if (!this.buses) return;
     const events = notesInWindow(this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
     this.scheduledUntil = toBeat;
+    // A receptor has one tone filter and one panner: notes struck together share them, set
+    // to their loudness-weighted average rather than to whichever note came last.
+    const shared = new Map<string, { w: number; brightness: number; pan: number }>();
+    for (const e of events) {
+      const key = `${e.receptorId}|${e.beat}`;
+      const a = shared.get(key) ?? { w: 0, brightness: 0, pan: 0 };
+      a.w += e.velocity;
+      a.brightness += e.brightness * e.velocity;
+      a.pan += e.pan * e.velocity;
+      shared.set(key, a);
+    }
     for (const e of events) {
       let time = this.clock.timeAt(e.beat);
       if (time < now - LATE_TOLERANCE_S) continue;
@@ -247,8 +258,10 @@ export class AudioEngine {
       const v = this.voiceFor(e.receptorId, e.instrument);
       if (!v) continue;
       try {
-        v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, e.brightness), Math.max(now, time - 0.05), 0.08);
-        v.panner.pan.setTargetAtTime(e.pan, Math.max(now, time - 0.05), 0.1);
+        const mix = shared.get(`${e.receptorId}|${e.beat}`)!;
+        const w = Math.max(1e-6, mix.w);
+        v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, mix.brightness / w), Math.max(now, time - 0.05), 0.08);
+        v.panner.pan.setTargetAtTime(mix.pan / w, Math.max(now, time - 0.05), 0.1);
         v.player.play(e.midi, holdS, time, e.velocity);
       } catch (err) {
         // A broken voice must not silence the instrument: drop it, the next note rebuilds it.

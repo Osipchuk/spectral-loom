@@ -21,7 +21,9 @@ import { QUALITY, Renderer, type Quality } from './render/renderer';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
-import type { ChordGlass, Loom, SceneModel } from './scene/types';
+import type { ChordGlass, EngineVersion, Loom, SceneModel } from './scene/types';
+import { recutLoom, toEngine1, toEngine2 } from './scene/engine2';
+import { loomSlots } from './optics/slots';
 import { notesInWindow, planNotes, type NoteTemplate } from './timing/arrivals';
 import { BeatClock } from './timing/clock';
 import { pulseSources, SUBDIVISION_BEATS, type PulseSource } from './timing/sources';
@@ -41,6 +43,8 @@ export interface AppOptions {
   /** Scene to open; omitted → an empty table with the welcome screen. */
   scene?: SceneModel;
   demoId?: string | null;
+  /** Engine that demos open in (the scene carries its own). Default 1. */
+  engine?: EngineVersion;
 }
 
 /** The empty table the welcome screen and tutorial start from. */
@@ -67,8 +71,12 @@ export class App {
   private tree: RayTree | null = null;
   private plan: NoteTemplate[] = [];
   private sources = new Map<string, PulseSource>();
-  /** Per loom card: where each pitch's ray crosses it (−0.5…0.5 along the card). */
+  /** Per loom card: where each pitch's ray crosses it (−0.5…0.5 along the card); engine 2: slot centres. */
   private cardLayout = new Map<string, Map<number, number>>();
+  /** Engine-2 cards: width of each slot, as a fraction of the card. */
+  private cardSlotWidth = new Map<string, Map<number, number>>();
+  /** Engine demos open in; follows the engine picker. */
+  private enginePref: EngineVersion;
   private dirty = { optics: true, crossfade: false, views: true };
   private raf = 0;
   private visible = true;
@@ -106,6 +114,7 @@ export class App {
     const scene = opts.scene ?? starterScene();
     this.store = new SceneStore(scene);
     this.demoId = opts.demoId ?? null;
+    this.enginePref = opts.engine ?? scene.settings.engine;
     this.engine = new AudioEngine(scene.settings.bpm);
     this.canvas = h('canvas.sl-canvas', { 'aria-label': 'Spectral Loom table' });
     this.stats = h('div.sl-stats', { 'aria-hidden': 'true' });
@@ -144,11 +153,13 @@ export class App {
           this.store.scene.settings.masterDb = db;
           this.engine.setMasterDb(db);
         },
+        onEngine: (e) => this.setEngine(e),
       },
       scene.settings.masterDb,
       this.renderer.quality,
     );
     this.transport.setScene(this.demoId);
+    this.transport.setEngine(scene.settings.engine);
 
     const home = h('button.sl-title-name', { type: 'button', text: 'Spectral Loom', title: 'Back to the start screen' });
     home.addEventListener('click', () => this.goHome());
@@ -157,7 +168,11 @@ export class App {
       html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>wheel</kbd>/<kbd>pinch</kbd> zoom <kbd>right-drag</kbd> pan <kbd>space</kbd> play',
     });
     this.overlay = opts.scene ? this.buildOverlay() : this.buildWelcome();
-    this.loomEditor = new LoomEditor(this.store, (id) => this.rowsForCard(id));
+    this.loomEditor = new LoomEditor(
+      this.store,
+      (id) => this.rowsForCard(id),
+      (id) => this.recutCard(id),
+    );
     this.root.append(this.noteLabels.el, this.chordLabels.el, this.loomEditor.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
@@ -359,6 +374,7 @@ export class App {
       this.dirty.views = true;
     }
     if (kinds.has('toggle')) this.dirty.crossfade = true;
+    if (kinds.has('load')) this.transport.setEngine(this.store.scene.settings.engine);
     if (kinds.has('settings') || kinds.has('load')) {
       const s = this.store.scene.settings;
       if (s.bpm !== this.engine.clock.bpm) this.engine.setBpm(s.bpm);
@@ -471,9 +487,64 @@ export class App {
     return { rows, kit: false, connected: false };
   }
 
-  private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
+  /**
+   * Engine-2 cards: one row per slot, labelled with the note (or notes) whose light falls
+   * through it now; dark slots stay as rows too, so holes punched there are not lost.
+   */
+  private computeSlotLayout(tree: RayTree): Map<string, Map<number, number>> {
+    const scene = this.store.scene;
     const out = new Map<string, Map<number, number>>();
     this.cardRows = new Map();
+    this.cardSlotWidth = new Map();
+    type Heard = { degs: Map<number, number>; rgb: [number, number, number]; n: number; pc: ReturnType<typeof receptorPitch> };
+    const heard = new Map<string, Map<number, Heard>>();
+    for (const hit of tree.receptorHits) {
+      if (hit.slot === null || hit.slot < 0 || hit.intensity < AUDIO_THRESHOLD) continue;
+      const r = this.store.get(hit.receptorId);
+      if (r?.kind !== 'receptor' || !r.enabled) continue;
+      const pc = receptorPitch(scene.settings, r);
+      const bySlot = heard.get(hit.pulseSourceId) ?? new Map<number, Heard>();
+      const h = bySlot.get(hit.slot) ?? { degs: new Map<number, number>(), rgb: [0, 0, 0], n: 0, pc };
+      const deg = lightToDegree(hit.light, pc);
+      h.degs.set(deg, (h.degs.get(deg) ?? 0) + 1);
+      const rgb = lightToRGB(hit.light);
+      h.rgb = [h.rgb[0] + rgb[0], h.rgb[1] + rgb[1], h.rgb[2] + rgb[2]];
+      h.n += 1;
+      bySlot.set(hit.slot, h);
+      heard.set(hit.pulseSourceId, bySlot);
+    }
+    for (const loom of scene.elements) {
+      if (loom.kind !== 'loom') continue;
+      const slots = loomSlots(loom);
+      out.set(loom.id, new Map(slots.map((sl, i) => [i, (sl.u0 + sl.u1) / 2])));
+      this.cardSlotWidth.set(loom.id, new Map(slots.map((sl, i) => [i, sl.u1 - sl.u0])));
+      const bySlot = heard.get(loom.id);
+      let kit = false;
+      const rows: LoomRows['rows'] = slots.map((_, i) => {
+        const h = bySlot?.get(i);
+        if (!h) return { deg: i, label: '—', rgb: [0.3, 0.3, 0.34] as [number, number, number] };
+        kit = h.pc.kit === true;
+        const degs = [...h.degs.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+        const name = (d: number): string => {
+          const midi = degreeToMidi(d, h.pc);
+          return h.pc.kit ? (DRUM_PIECES[midi - DRUM_BASE_MIDI] ?? '') : midiName(midi);
+        };
+        const label = degs.slice(0, 2).map(([d]) => name(d)).sort().join('+');
+        return { deg: i, pitch: degs[0]![0], label, rgb: [h.rgb[0] / h.n, h.rgb[1] / h.n, h.rgb[2] / h.n] as [number, number, number] };
+      });
+      // The editor draws the last row on top: keep higher notes above lower ones.
+      const pitched = rows.filter((r) => r.pitch !== undefined);
+      if (pitched.length > 1 && pitched[0]!.pitch! > pitched[pitched.length - 1]!.pitch!) rows.reverse();
+      this.cardRows.set(loom.id, { rows, kit, connected: !!bySlot, slots: true });
+    }
+    return out;
+  }
+
+  private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
+    if (this.store.scene.settings.engine === 2) return this.computeSlotLayout(tree);
+    const out = new Map<string, Map<number, number>>();
+    this.cardRows = new Map();
+    this.cardSlotWidth = new Map();
     const scene = this.store.scene;
     const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom').map((l) => [l.id, l]));
     for (const hit of tree.receptorHits) {
@@ -678,7 +749,7 @@ export class App {
           dot.material.color.copy(this.tmpColor);
         });
       } else if (el.kind === 'loom' && view.dynamic.card) {
-        drawCard(view.dynamic.card, el, this.cardLayout.get(el.id) ?? new Map(), beat ?? 0);
+        drawCard(view.dynamic.card, el, this.cardLayout.get(el.id) ?? new Map(), beat ?? 0, this.cardSlotWidth.get(el.id));
       }
     }
   }
@@ -713,7 +784,34 @@ export class App {
 
   loadDemo(id: string): void {
     const demo = DEMO_SCENES.find((d) => d.id === id);
-    if (demo) this.loadScene(parseScene(demo.scene), demo.id);
+    if (!demo) return;
+    const scene = parseScene(demo.scene);
+    this.loadScene(this.enginePref === 2 ? toEngine2(scene) : scene, demo.id);
+  }
+
+  /**
+   * Switch the table to another engine without changing what it plays: engine-2 cards get
+   * slots cut where their colours cross them now, engine-1 cards get back the pitches that
+   * fall through their slots now. Demos opened afterwards open in the same engine.
+   */
+  setEngine(engine: EngineVersion): void {
+    this.enginePref = engine;
+    const scene = this.store.scene;
+    if (scene.settings.engine === engine) return;
+    const selected = this.store.selectedId;
+    this.loadScene(engine === 2 ? toEngine2(scene) : toEngine1(scene), this.demoId);
+    if (selected) this.store.select(selected);
+  }
+
+  /** Engine-2 card: re-cut its slots around the colours crossing it now (see recutLoom). */
+  private recutCard(id: string): void {
+    const cut = recutLoom(this.store.scene, id).elements.find((e) => e.id === id);
+    if (cut?.kind !== 'loom') return;
+    this.store.updateElement(id, (e) => {
+      if (e.kind !== 'loom') return;
+      e.slots = cut.slots;
+      e.notes = cut.notes;
+    });
   }
 
   private saveScene(): void {

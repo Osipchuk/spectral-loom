@@ -82,11 +82,20 @@ export interface Receptor extends BaseElement {
   gain: number;
 }
 
-/** One note on a loom card, in scale-degree space (0 = root at the receptor's octave). */
+/**
+ * One note on a loom card. `deg` is the card's row: a scale degree (0 = root at the
+ * receptor's octave) on an engine-1 card, a slot index on an engine-2 card.
+ */
 export interface LoomNote {
   at: number;
   len: number;
   deg: number;
+}
+
+/** A slot cut through an engine-2 card, from u0 to u1 along it (−0.5…0.5). */
+export interface LoomSlot {
+  u0: number;
+  u1: number;
 }
 
 /**
@@ -101,6 +110,11 @@ export interface Loom extends BaseElement {
   notes: LoomNote[];
   depth: number;
   title: string;
+  /**
+   * Engine 2: the slots cut through the card. A hole in row k lets through whatever colour
+   * crosses slot k, so the optics decide the pitch. Missing → evenly spaced default slots.
+   */
+  slots?: LoomSlot[];
 }
 
 /**
@@ -139,7 +153,15 @@ export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator 
 export type ElementKind = SceneElement['kind'];
 export type ElementOf<K extends ElementKind> = Extract<SceneElement, { kind: K }>;
 
+/**
+ * 1: loom cards store pitches (the card is the score, light only carries it).
+ * 2: loom cards store slots (the card says when, the light says what), soft quantization,
+ *    loudness, tone and stereo per note from where and how tightly its light lands.
+ */
+export type EngineVersion = 1 | 2;
+
 export interface GlobalSettings {
+  engine: EngineVersion;
   bpm: number;
   beatsPerBar: number;
   scale: ScaleName;

@@ -36,6 +36,11 @@ export interface RaySegment {
   bounces: number;
   /** Narrowed to a thin line (interference comb): drawn as a line, never filled into a fan. */
   thin: boolean;
+  /**
+   * Engine 2: the slot of the card (the last pulse source) this light came through, −1 where
+   * it crossed solid card; null when the last pulse source is not an engine-2 card.
+   */
+  slot: number | null;
   depth: number;
   audible: boolean;
 }
@@ -53,6 +58,12 @@ export interface ReceptorHit {
   bounces: number;
   /** Offset along the receptor aperture, -0.5..0.5. */
   u: number;
+  /** Where the light lands. */
+  pos: Vec2;
+  /** Rays in this light's dispersed fan (1 for undispersed light): `intensity / fan` is its own power. */
+  fan: number;
+  /** Engine-2 card slot this light came through (see RaySegment.slot). */
+  slot: number | null;
 }
 
 export interface RayTree {

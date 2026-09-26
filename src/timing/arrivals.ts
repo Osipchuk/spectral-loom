@@ -1,7 +1,7 @@
 import { degreeToMidi, lightToDegree, receptorPitch } from '../music/pitch';
 import type { RayTree } from '../optics/types';
 import type { Instrument, Receptor, SceneModel } from '../scene/types';
-import { pulsesInRange, type PulseSource } from './sources';
+import { pulsesInRange, type Pulse, type PulseSource } from './sources';
 
 /** Width that counts as "normal" beam width for velocity; narrower (focused) is louder. */
 const REF_WIDTH = 0.26;
@@ -29,6 +29,8 @@ export interface NoteTemplate {
   brightness: number;
   /** Stereo position from the receptor's place on the table, −1 … 1. */
   pan: number;
+  /** Engine 2: the card slot this note's light came through (see Pulse.slots). */
+  slot: number | null;
 }
 
 export interface NoteEvent {
@@ -54,6 +56,28 @@ export function irradianceBrightness(power: number, extent: number): number {
   return Math.min(1, Math.max(0, (Math.log2(Math.max(rel, 1e-6)) + 4) / 6.3));
 }
 
+/**
+ * Engine 2: irradiance of one note's own light where it lands (its power over the width it
+ * covers, relative to a plain beam), 0…1 on a log scale: a slice of a spread rainbow ≈ 0.15,
+ * a plain beam ≈ 0.7, rainbow light a lens gathers to a point ≈ 0.55, a focused beam → 1.
+ * Independent of how many rays happen to sample the note: more rays, more power, more width.
+ */
+export function noteBrightness(power: number, extent: number): number {
+  const rel = (power * REF_WIDTH) / Math.max(extent, 0.03);
+  return Math.min(1, Math.max(0, (Math.log2(Math.max(rel, 1e-6)) + 6) / 8.5));
+}
+
+/**
+ * Engine 2: a continuous pull towards the grid. Onsets near a grid line land on it (the
+ * pull is flat there), onsets halfway between stay put, and nothing in between ever jumps:
+ * moving an element moves its notes smoothly. Strength 1 is the strongest pull that keeps
+ * the order of onsets (x + shift(x) never decreases).
+ */
+export function softQuantizeShift(first: number, strength: number, grid = QUANT_GRID_BEATS): number {
+  const k = Math.min(1, Math.max(0, strength));
+  return (-k * grid * Math.sin((2 * Math.PI * first) / grid)) / (2 * Math.PI);
+}
+
 /** Quantize the first onset of a group to the grid, moving the whole group rigidly. */
 export function quantizeShift(firstBeat: number, strength: number, grid = QUANT_GRID_BEATS): number {
   const target = Math.round(firstBeat / grid) * grid;
@@ -71,6 +95,14 @@ export function travelBeats(distance: number, c: number): number {
  * to a scale degree, power is summed per degree, and the group's first onset is quantized.
  */
 export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
+  return scene.settings.engine === 2 ? planNotesV2(scene, tree) : planNotesV1(scene, tree);
+}
+
+function receptorPan(scene: SceneModel, r: Receptor): number {
+  return Math.max(-0.6, Math.min(0.6, ((r.pos.x / scene.table.w) * 2 - 1) * 0.8));
+}
+
+function planNotesV1(scene: SceneModel, tree: RayTree): NoteTemplate[] {
   const receptors = new Map<string, Receptor>();
   for (const el of scene.elements) if (el.kind === 'receptor' && el.enabled) receptors.set(el.id, el);
   const { c, quantize } = scene.settings;
@@ -123,7 +155,7 @@ export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
     const first = Math.min(...entries.map(([, a]) => a.first));
     const shift = quantizeShift(first, quantize);
     const brightness = irradianceBrightness(g.powerSum / g.hits, g.uMax - g.uMin + g.widthSum / g.hits);
-    const pan = Math.max(-0.6, Math.min(0.6, ((r.pos.x / scene.table.w) * 2 - 1) * 0.8));
+    const pan = receptorPan(scene, r);
     for (const [deg, a] of entries) {
       // Average power per ray, so a degree sampled by two rays is not twice as loud.
       const p = a.power / a.rays;
@@ -142,10 +174,93 @@ export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
         voices: r.voices,
         brightness,
         pan,
+        slot: null,
       });
     }
   }
   return out;
+}
+
+/**
+ * Engine 2. Same grouping as engine 1, but every (slot, pitch) pair is its own note with its
+ * own loudness, tone and stereo position, all read from where its light lands: gathered
+ * light is louder and brighter, and a receptor turned across the table spreads its notes
+ * from left to right. Onsets are pulled to the grid softly (see softQuantizeShift).
+ */
+function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
+  const receptors = new Map<string, Receptor>();
+  for (const el of scene.elements) if (el.kind === 'receptor' && el.enabled) receptors.set(el.id, el);
+  const { c, quantize } = scene.settings;
+
+  type Acc = { degree: number; slot: number | null; power: number; own: number; rays: number; first: number; uMin: number; uMax: number; widthSum: number; xSum: number };
+  type Group = { receptor: Receptor; sourceId: string; echo: number; notes: Map<string, Acc> };
+  const groups = new Map<string, Group>();
+
+  for (const hit of tree.receptorHits) {
+    const r = receptors.get(hit.receptorId);
+    if (!r || hit.intensity < AUDIO_THRESHOLD) continue;
+    const key = `${r.id}|${hit.pulseSourceId}|${hit.bounces}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { receptor: r, sourceId: hit.pulseSourceId, echo: hit.bounces, notes: new Map() };
+      groups.set(key, g);
+    }
+    const degree = lightToDegree(hit.light, receptorPitch(scene.settings, r));
+    const nk = `${hit.slot ?? ''}|${degree}`;
+    let a = g.notes.get(nk);
+    if (!a) {
+      a = { degree, slot: hit.slot, power: 0, own: 0, rays: 0, first: Infinity, uMin: Infinity, uMax: -Infinity, widthSum: 0, xSum: 0 };
+      g.notes.set(nk, a);
+    }
+    const u = hit.u * r.aperture;
+    a.power += hit.intensity;
+    a.own += hit.intensity / hit.fan;
+    a.rays += 1;
+    a.first = Math.min(a.first, travelBeats(hit.s - hit.pulseOriginS, c));
+    a.uMin = Math.min(a.uMin, u);
+    a.uMax = Math.max(a.uMax, u);
+    a.widthSum += Math.max(hit.width, 0.05);
+    a.xSum += hit.pos.x;
+  }
+
+  const out: NoteTemplate[] = [];
+  for (const g of groups.values()) {
+    const r = g.receptor;
+    const notes = [...g.notes.values()];
+    if (notes.length === 0) continue;
+    const first = Math.min(...notes.map((a) => a.first));
+    const shift = softQuantizeShift(first, quantize);
+    const basePan = receptorPan(scene, r);
+    const pc = receptorPitch(scene.settings, r);
+    for (const a of notes) {
+      const p = Math.min(1, a.power / a.rays);
+      const brightness = noteBrightness(a.own, a.uMax - a.uMin + a.widthSum / a.rays);
+      const velocity = Math.min(1, (0.18 + 0.38 * p + 0.5 * brightness) * r.gain);
+      const across = (a.xSum / a.rays - r.pos.x) / Math.max(0.5, r.aperture / 2);
+      out.push({
+        receptorId: r.id,
+        sourceId: g.sourceId,
+        degree: a.degree,
+        midi: degreeToMidi(a.degree, pc),
+        velocity,
+        offsetBeats: a.first + shift,
+        travelBeats: a.first,
+        echo: g.echo,
+        instrument: r.instrument,
+        voices: r.voices,
+        brightness,
+        pan: Math.max(-0.85, Math.min(0.85, basePan * 0.7 + across * 0.45)),
+        slot: a.slot,
+      });
+    }
+  }
+  return out;
+}
+
+/** Whether a pulse sounds a note: engine-2 cards open slots, engine-1 cards and chord glass pick pitches. */
+export function pulsePasses(p: Pick<Pulse, 'degrees' | 'slots'>, t: Pick<NoteTemplate, 'degree' | 'slot'>): boolean {
+  if (p.slots) return t.slot !== null && p.slots.includes(t.slot);
+  return !p.degrees || p.degrees.includes(t.degree);
 }
 
 /**
@@ -175,10 +290,14 @@ export function notesInWindow(
     const minOff = Math.min(...list.map((t) => t.offsetBeats));
     const maxOff = Math.max(...list.map((t) => t.offsetBeats));
     for (const pulse of pulsesInRange(src, fromBeat - maxOff - 1e-9, toBeat - minOff)) {
-      const chosen = list
-        .filter((t) => !pulse.degrees || pulse.degrees.includes(t.degree))
-        .sort((a, b) => b.velocity - a.velocity)
-        .slice(0, list[0]!.voices);
+      // One pitch sounds once per pulse, even if its light came through two open slots.
+      const byMidi = new Map<number, NoteTemplate>();
+      for (const t of list) {
+        if (!pulsePasses(pulse, t)) continue;
+        const prev = byMidi.get(t.midi);
+        if (!prev || t.velocity > prev.velocity) byMidi.set(t.midi, t);
+      }
+      const chosen = [...byMidi.values()].sort((a, b) => b.velocity - a.velocity).slice(0, list[0]!.voices);
       for (const t of chosen) {
         const beat = pulse.beat + t.offsetBeats;
         if (beat < fromBeat || beat >= toBeat) continue;

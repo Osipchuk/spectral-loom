@@ -2,13 +2,16 @@ import { App } from './app';
 import { LIGHT_CHANGES_MUSIC } from './capture/timeline';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene } from './scene/serialize';
-import type { SceneModel } from './scene/types';
+import { toEngine2 } from './scene/engine2';
+import type { EngineVersion, SceneModel } from './scene/types';
 import './ui/styles.css';
 
 export interface MountOptions {
   /** Demo to open (see DEMO_SCENES ids), or a full scene. Defaults to the welcome screen. */
   demo?: string;
   scene?: SceneModel | string;
+  /** Engine demos open in: 1 (cards hold notes, default) or 2 (the light picks the notes). */
+  engine?: EngineVersion;
 }
 
 export interface SpectralLoomHandle {
@@ -24,11 +27,13 @@ export interface SpectralLoomHandle {
 export function mount(container: HTMLElement, opts: MountOptions = {}): SpectralLoomHandle {
   const demo = DEMO_SCENES.find((d) => d.id === opts.demo);
   // No scene and no demo: open on an empty table with the welcome screen and tutorial.
+  const engine = opts.engine === 2 ? 2 : 1;
+  const demoScene = (s: SceneModel): SceneModel => (engine === 2 ? toEngine2(s) : s);
   const app = opts.scene
-    ? new App(container, { scene: parseScene(opts.scene), demoId: null })
+    ? new App(container, { scene: parseScene(opts.scene), demoId: null, engine })
     : demo
-      ? new App(container, { scene: parseScene(demo.scene), demoId: demo.id })
-      : new App(container, {});
+      ? new App(container, { scene: demoScene(parseScene(demo.scene)), demoId: demo.id, engine })
+      : new App(container, { engine });
 
   if (new URLSearchParams(location.search).has('debug')) {
     // Test hook for headless checks: render a demo offline and return WAV bytes as base64.

@@ -35,9 +35,10 @@ export function createCardSurface(length: number): CardSurface {
 /**
  * Draw the punched card like a player-piano roll: time runs downward through the beam
  * line. Holes are placed where the ray of that pitch crosses the card (`degreeU`, −0.5…0.5
- * along the card), so you can see which colour each hole lets through.
+ * along the card), so you can see which colour each hole lets through. Engine-2 cards pass
+ * their slots: `degreeU` then maps each slot to its centre and `rowWidth` to its width.
  */
-export function drawCard(surface: CardSurface, loom: Loom, degreeU: Map<number, number>, beat: number): void {
+export function drawCard(surface: CardSurface, loom: Loom, degreeU: Map<number, number>, beat: number, rowWidth?: Map<number, number>): void {
   const { canvas, ctx, alphaCtx } = surface;
   const W = canvas.width;
   const H = canvas.height;
@@ -72,16 +73,18 @@ export function drawCard(surface: CardSurface, loom: Loom, degreeU: Map<number, 
       const y0 = beamY - end * rowH;
       const y1 = beamY - start * rowH;
       if (y1 < -rowH || y0 > H + rowH) continue;
-      const x = (u + 0.5) * W - holeW / 2;
+      const slotW = rowWidth?.get(n.deg);
+      const hw = slotW === undefined ? holeW : Math.max(4, slotW * W - 3);
+      const x = (u + 0.5) * W - hw / 2;
       const active = start <= 0 && end > 0;
-      const r = holeW / 2;
+      const r = Math.min(hw, holeW) / 2;
       const hy = y0 + 2;
       const hh = Math.max(2, y1 - y0 - 4);
       ctx.fillStyle = active ? '#2a1c08' : '#3a2d18';
-      roundRect(ctx, x, hy, holeW, hh, r);
+      roundRect(ctx, x, hy, hw, hh, r);
       ctx.fill();
       alphaCtx.fillStyle = active ? '#000000' : '#303030';
-      roundRect(alphaCtx, x, hy, holeW, hh, r);
+      roundRect(alphaCtx, x, hy, hw, hh, r);
       alphaCtx.fill();
     }
   }

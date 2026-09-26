@@ -8,6 +8,7 @@ import {
   type Collider,
   type SegmentCollider,
 } from './geometry';
+import { cardU, loomSlots, slotAt } from './slots';
 import { centroidNm, combPeaks, combTransmission, filterLight, pitchPosition, sampleBand, WHITE, type RayLight } from './spectrum';
 import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit, type TraceOptions } from './types';
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
@@ -34,6 +35,7 @@ interface RayState {
   pathKey: string;
   ignoreId: string | null;
   thin: boolean;
+  slot: number | null;
 }
 
 /** Max-heap on intensity so the segment budget is spent on the brightest rays first. */
@@ -101,6 +103,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
   const heap = new RayHeap();
   let groupCounter = 0;
   let truncated = false;
+  const engine2 = scene.settings.engine === 2;
 
   for (const el of scene.elements) {
     if (el.kind !== 'emitter' || !el.enabled || el.intensity <= 0) continue;
@@ -123,6 +126,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       pathKey: el.id,
       ignoreId: null,
       thin: false,
+      slot: null,
     });
   }
 
@@ -180,6 +184,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       pathKey: ray.pathKey,
       bounces: ray.bounces,
       thin: ray.thin,
+      slot: ray.slot,
       depth: ray.depth,
       audible: fanPower >= opts.audioThreshold,
     };
@@ -237,6 +242,9 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
             pulseOriginS: ray.pulseOriginS,
             bounces: ray.bounces,
             u: best.u - 0.5,
+            pos: end,
+            fan: ray.group ? ray.group.count : 1,
+            slot: ray.slot,
           });
         } else {
           seg.endEvent = { kind: 'absorbed', elementId: c.elementId };
@@ -373,13 +381,17 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
 
       case 'modulator':
       case 'loom':
-      case 'chord':
+      case 'chord': {
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: c.role };
+        // Engine 2: a card remembers which of its slots the light went through.
+        const el = byId.get(c.elementId);
+        const slot = engine2 && el?.kind === 'loom' ? slotAt(loomSlots(el), cardU(el, end)) : null;
         child(
-          { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId },
+          { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId, slot },
           'm',
         );
         break;
+      }
     }
   }
 

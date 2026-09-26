@@ -27,6 +27,33 @@ through them, and where it lands, it plays.
   the trees, fireflies — and the colour of the moonlight. `?weather=aurora|rain|snow|mist`
   pins it.
 
+## Engines: who plays the music
+
+The picker next to the scene list switches between two engines. Demos open in V1 unless the
+page is loaded with `?engine=2` (or `mount(el, { engine: 2 })`); switching converts the
+table in place and keeps what it plays.
+
+- **V1 · card plays.** A loom card stores pitches. The optics only decide which pitches are
+  available and add a fixed delay, so moving glass rarely changes the music — until a
+  voice's travel time crosses a rounding boundary and the whole voice jumps a sixteenth.
+- **V2 · light plays.** A loom card stores **slots**: holes at fixed places along the card.
+  A hole plays whatever colour crosses that place now, so turning a prism slides the
+  rainbow under the holes and the same card plays other notes; moving the card toward the
+  prism lets one slot catch two colours. On top of that:
+  - onsets are pulled to the grid **softly** (flat near grid lines, continuous everywhere),
+    so no nudge throws a voice across the grid;
+  - every note gets its own loudness and tone from the **irradiance** of its own light (a
+    lens that gathers a colour makes that note louder and brighter), and its own stereo
+    position from where it lands (turn a receptor across the table to widen the image).
+
+  *Cut to light* in the card editor freezes what you hear: it re-cuts the slots around the
+  colours crossing the card now, one colour per slot, keeping the notes currently playing.
+
+Converting a V1 scene cuts one slot per pitch exactly where that colour crosses the card,
+and trims receptor distances by a fraction of a cell where V1 had rounded a voice onto the
+grid, so the demos play the same notes. `tests/engine2.test.ts` checks this for every
+demo, and that turning an element never snaps a note across the grid in V2 (it does in V1).
+
 ## Run
 
 ```bash

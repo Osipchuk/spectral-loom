@@ -12,10 +12,14 @@ export const ENV_SLOTS: (Instrument | 'neutral')[] = ['neutral', 'pad', 'pluck',
 export const MIN_VISUAL_GAP_S = 1 / 3;
 export const PULSES_PER_CHANNEL = 64;
 
-/** A row of the pulse texture: one pulse source, optionally narrowed to one pitch (loom cards). */
+/**
+ * A row of the pulse texture: one pulse source, optionally narrowed to one pitch (engine-1
+ * cards, chord glass) or to one slot (engine-2 cards).
+ */
 export interface VisualChannel {
   sourceId: string;
   degree: number | null;
+  slot?: number;
 }
 
 export interface SegmentVisual {
@@ -45,12 +49,12 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
   const byId = new Map(scene.elements.map((e) => [e.id, e]));
   const channels: VisualChannel[] = [];
   const channelIndex = new Map<string, number>();
-  const channel = (sourceId: string, degree: number | null): number => {
-    const key = `${sourceId}|${degree ?? ''}`;
+  const channel = (sourceId: string, degree: number | null, slot?: number): number => {
+    const key = `${sourceId}|${degree ?? ''}|${slot ?? ''}`;
     let i = channelIndex.get(key);
     if (i === undefined) {
       i = channels.length;
-      channels.push({ sourceId, degree });
+      channels.push(slot === undefined ? { sourceId, degree } : { sourceId, degree, slot });
       channelIndex.set(key, i);
     }
     return i;
@@ -66,7 +70,7 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
     if (r?.kind !== 'receptor') continue;
     const deg = lightToDegree(hit.light, receptorPitch(scene.settings, r));
     const t = plan.find(
-      (p) => p.receptorId === r.id && p.sourceId === hit.pulseSourceId && p.echo === hit.bounces && p.degree === deg,
+      (p) => p.receptorId === r.id && p.sourceId === hit.pulseSourceId && p.echo === hit.bounces && p.degree === deg && p.slot === hit.slot,
     );
     if (t) warpOf.set(hit.segmentId, (t.offsetBeats - t.travelBeats) * spb);
     const src = byId.get(hit.pulseSourceId);
@@ -84,7 +88,11 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
   for (const seg of tree.segments) {
     const src = byId.get(seg.pulseSourceId);
     let ch: number;
-    if (src?.kind === 'loom' || src?.kind === 'chord') {
+    if (src?.kind === 'loom' && seg.slot !== null) {
+      // Engine-2 card: light behind a slot swells when that slot is open, whatever its colour
+      // and whether or not it reaches a receptor; light behind solid card only glows.
+      ch = seg.slot < 0 ? -1 : channel(src.id, null, seg.slot);
+    } else if (src?.kind === 'loom' || src?.kind === 'chord') {
       const deg = degreeOf.get(seg.id);
       // Loom light that never reaches a receptor has no pitch: it only carries the base glow.
       ch = deg === undefined ? -1 : channel(src.id, deg);
@@ -117,8 +125,8 @@ export function channelPulses(
   fromS: number,
   toS: number,
 ): VisualPulse[] {
-  const raw = pulsesInRange(src, clock.beatAt(fromS), clock.beatAt(toS)).filter(
-    (p) => ch.degree === null || !p.degrees || p.degrees.includes(ch.degree),
+  const raw = pulsesInRange(src, clock.beatAt(fromS), clock.beatAt(toS)).filter((p) =>
+    ch.slot !== undefined ? !!p.slots?.includes(ch.slot) : ch.degree === null || !p.degrees || p.degrees.includes(ch.degree),
   );
   const out: VisualPulse[] = [];
   let lastLaunch = -Infinity;
