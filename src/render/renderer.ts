@@ -9,6 +9,7 @@ import type { RayTree } from '../optics/types';
 import type { SceneModel } from '../scene/types';
 import type { VisualLayout } from '../timing/visual';
 import { Atmosphere } from './atmosphere';
+import { Diorama } from './diorama';
 import { BeamLayer } from './beams/beam-layer';
 import { createElementView, ElementViews } from './elements/element-views';
 import { Materials } from './elements/materials';
@@ -41,6 +42,24 @@ const FinishShader = {
       col.r = texture2D(tDiffuse, vUv - c * ca).r;
       col.g = texture2D(tDiffuse, vUv).g;
       col.b = texture2D(tDiffuse, vUv + c * ca).b;
+      // Tilt-shift: the table band stays sharp, the world above and below blurs like a
+      // macro photo of a miniature.
+      float blur = smoothstep(0.2, 0.5, abs(vUv.y - 0.47)) * 3.5;
+      if (blur > 0.05) {
+        vec2 px = blur / uResolution;
+        vec3 acc = col;
+        acc += texture2D(tDiffuse, vUv + vec2(px.x, 0.0)).rgb;
+        acc += texture2D(tDiffuse, vUv - vec2(px.x, 0.0)).rgb;
+        acc += texture2D(tDiffuse, vUv + vec2(0.0, px.y)).rgb;
+        acc += texture2D(tDiffuse, vUv - vec2(0.0, px.y)).rgb;
+        acc += texture2D(tDiffuse, vUv + px * 0.7).rgb;
+        acc += texture2D(tDiffuse, vUv - px * 0.7).rgb;
+        acc += texture2D(tDiffuse, vUv + vec2(px.x, -px.y) * 0.7).rgb;
+        acc += texture2D(tDiffuse, vUv + vec2(-px.x, px.y) * 0.7).rgb;
+        col = acc / 9.0;
+      }
+      float luma = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(vec3(luma), col, 1.12);
       col *= mix(1.0, 0.42, smoothstep(0.08, 0.55, r2 * 1.5));
       // Static-per-frame film grain hides banding in the dark gradients.
       float n = hash(vUv * uResolution + fract(uTime) * 97.0) - 0.5;
@@ -59,13 +78,17 @@ export const CAMERA_LIMITS = { azimuth: 0.42, polarMin: 0.42, polarMax: 0.86 };
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 600);
+  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 1000);
   readonly frame: TableFrame;
   readonly beams: BeamLayer;
   readonly glows: Glows;
   readonly views: ElementViews;
   readonly gizmo: Gizmo;
   readonly atmosphere: Atmosphere;
+  readonly diorama: Diorama;
+  private key: THREE.DirectionalLight;
+  private hemi: THREE.HemisphereLight;
+  private sky = { top: new THREE.Color(), horizon: new THREE.Color(), fog: new THREE.Color(), moon: new THREE.Color() };
   readonly angles: CameraAngles = { azimuth: 0, polar: 0.66 };
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
@@ -101,8 +124,10 @@ export class Renderer {
     this.scene.environmentIntensity = 0.6;
     this.scene.background = null;
 
-    this.scene.add(new THREE.HemisphereLight(0x8a96b8, 0x0a0a0c, 0.6));
+    this.hemi = new THREE.HemisphereLight(0x8a96b8, 0x0a0a0c, 0.6);
+    this.scene.add(this.hemi);
     const key = new THREE.DirectionalLight(0xfff1e0, 1.5);
+    this.key = key;
     key.position.set(-18, 30, -10);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -123,7 +148,9 @@ export class Renderer {
     this.glows = new Glows(this.frame);
     this.gizmo = new Gizmo(this.frame);
     this.atmosphere = new Atmosphere(this.frame);
-    this.scene.add(this.atmosphere.group, this.table.group, this.views.group, this.beams.group, this.glows.group, this.gizmo.group);
+    this.diorama = new Diorama(scene.table.w, scene.table.h);
+    this.scene.fog = new THREE.Fog(0x05070d, 70, 330);
+    this.scene.add(this.atmosphere.group, this.diorama.group, this.table.group, this.views.group, this.beams.group, this.glows.group, this.gizmo.group);
 
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
@@ -243,6 +270,34 @@ export class Renderer {
     this.scene.add(this.ghost);
   }
 
+  private tmpV = new THREE.Vector3();
+
+  /**
+   * Light the miniature world from the weather: warm golden moonlight for bright music,
+   * cold blue for dark, dimmer under cloud, tinted green-violet while the aurora is up.
+   */
+  private applyWeather(time: number): void {
+    const w = this.atmosphere.current;
+    const cold = new THREE.Color(0.55, 0.65, 1.0);
+    const warm = new THREE.Color(1.0, 0.82, 0.58);
+    this.key.color.copy(cold).lerp(warm, w.warmth);
+    this.key.intensity = 1.6 * (1 - 0.55 * w.clouds) * (0.8 + 0.4 * w.warmth);
+    this.hemi.color.setRGB(0.45 + 0.1 * w.warmth, 0.52 + 0.35 * w.aurora * 0.5, 0.75 - 0.2 * w.warmth);
+    this.hemi.intensity = 0.45 + 0.35 * w.aurora + 0.1 * w.snow;
+    this.sky.top.setRGB(0.004, 0.006, 0.02);
+    this.sky.horizon.setRGB(0.03 + 0.03 * w.clouds + 0.02 * w.warmth, 0.045 + 0.03 * w.clouds + 0.05 * w.aurora, 0.09 + 0.02 * w.clouds);
+    this.sky.fog.copy(this.sky.horizon).lerp(new THREE.Color(0.07, 0.08, 0.1), w.mist * 0.6);
+    this.sky.moon.copy(this.key.color).multiplyScalar(1 - 0.7 * w.clouds);
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.copy(this.sky.fog);
+    fog.near = 70 - 40 * w.mist - 20 * w.rain;
+    fog.far = 330 - 150 * w.mist - 100 * w.rain;
+    this.diorama.update(time, w, this.pixelRatio, this.sky);
+    // Where the far water meets the sky on screen.
+    this.tmpV.set(this.camera.position.x, -1.75, this.camera.position.z - 600).project(this.camera);
+    this.atmosphere.setHorizon(this.tmpV.y * 0.5 + 0.5);
+  }
+
   /** Musical energy 0…1 for the room to breathe with. */
   energy = 0;
 
@@ -255,12 +310,14 @@ export class Renderer {
     }
     this.beams.update(time, now);
     this.atmosphere.update(time, this.pixelRatio, this.energy, this.size.x / Math.max(1, this.size.y), new THREE.Vector2(this.angles.azimuth, this.angles.polar - 0.66));
+    this.applyWeather(time);
     this.finish.uniforms.uTime!.value = time;
     this.composer.render();
   }
 
   dispose(): void {
     this.setGhost(null);
+    this.diorama.dispose();
     this.beams.dispose();
     this.atmosphere.dispose();
     this.glows.dispose();

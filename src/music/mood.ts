@@ -7,9 +7,15 @@ export interface Weather {
   snow: number;
   mist: number;
   clouds: number;
+  /** Trees and grass sway, rain slants. */
+  wind: number;
+  /** Warm glowing specks over the meadow on calm, bright music. */
+  fireflies: number;
+  /** Light colour: 0 cold blue moonlight … 1 warm golden. */
+  warmth: number;
 }
 
-export const CALM_NIGHT: Weather = { aurora: 0.08, rain: 0, snow: 0, mist: 0.35, clouds: 0.15 };
+export const CALM_NIGHT: Weather = { aurora: 0.08, rain: 0, snow: 0, mist: 0.35, clouds: 0.15, wind: 0.12, fireflies: 0.35, warmth: 0.5 };
 
 const VALENCE: Record<ScaleName, number> = { majorPent: 0.7, major: 0.6, dorian: -0.1, minorPent: -0.55, minor: -0.7 };
 
@@ -57,5 +63,8 @@ export function moodWeather(m: MoodInput): Weather {
     snow: clamp((share('bell') * 1.2 + 0.2) * (1 - arousal) * (0.4 + 0.6 * clamp(valence + 0.5)) - 0.1),
     mist: clamp((0.2 + (1 - arousal) * 0.45 * (share('pad') + 0.4)) * (1 - 0.4 * dark)),
     clouds: clamp(0.1 + dark * 0.8 + (1 - bright) * 0.15),
+    wind: clamp(0.1 + arousal * 0.9),
+    fireflies: clamp(bright * (1 - arousal) * 1.3),
+    warmth: clamp(0.5 + valence * 0.5),
   };
 }

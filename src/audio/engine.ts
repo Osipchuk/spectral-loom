@@ -119,7 +119,7 @@ export class AudioEngine {
       pad: bus(0.85, 0.55, 0.05),
       pluck: bus(1.3, 0.3, 0.22),
       bell: bus(1.15, 0.5, 0.18),
-      drums: bus(1.0, 0.12, 0.04),
+      drums: bus(0.8, 0.12, 0.04),
     };
     this.master = master;
     this.nodes.push(limiter, comp, reverb, delay, dry, master);

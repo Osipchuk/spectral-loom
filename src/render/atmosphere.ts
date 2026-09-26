@@ -112,22 +112,8 @@ void main() {
   if (y >= 0.0) {
     col = landscape(p, y, false);
   } else {
-    // Lake: the sky and mountains mirrored, broken by ripples (rain adds more).
-    float depth = -y;
-    float ripple = (nz(vec2(p.x * 1.5, depth * 18.0 - uTime * 0.05)) - 0.5) * (0.004 + depth * 0.03) * (1.0 + uWeather.y * 2.5);
-    vec3 refl = landscape(vec2(p.x + ripple, p.y), depth * 1.1 + ripple * 2.0, true);
-    float fres = mix(0.55, 0.2, smoothstep(0.0, 0.4, depth));
-    col = refl * fres + vec3(0.004, 0.006, 0.012);
-    // Moon glitter path on the water.
-    float glitter = step(0.9, nz(vec2(p.x * 14.0, depth * 70.0 + uTime * 0.2))) * exp(-abs(p.x - 0.22 * uAspect.x) * 14.0) * smoothstep(0.35, 0.0, depth);
-    col += vec3(0.6, 0.65, 0.8) * glitter * 0.35 * (1.0 - uClouds);
-    // Rain rings on the water.
-    vec2 rg = vec2(p.x * 16.0, depth * 40.0);
-    vec2 rid = floor(rg);
-    vec2 rc = vec2(hash(rid + 2.0), hash(rid + 4.0)) * 0.6 + 0.2;
-    float rt = fract(uTime * 0.6 + hash(rid) * 7.0);
-    float ring = abs(length((fract(rg) - rc) * vec2(1.0, 2.8)) - rt * 0.35);
-    col += vec3(0.25, 0.3, 0.4) * smoothstep(0.035, 0.0, ring) * (1.0 - rt) * step(0.8, hash(rid + 9.0)) * uWeather.y * 0.3;
+    // Below the horizon the 3D lake covers the screen; this is only a fallback.
+    col = landscape(p, 0.0, true) * 0.5;
   }
   // Mist hugging the horizon.
   vec3 mistCol = vec3(0.07, 0.08, 0.11);
@@ -218,6 +204,16 @@ export class Atmosphere {
   /** Current weather, eased towards the target so the sky changes over several seconds. */
   private weather: Weather = { ...CALM_NIGHT };
   private target: Weather = { ...CALM_NIGHT };
+
+  /** The eased weather currently shown. */
+  get current(): Weather {
+    return this.weather;
+  }
+
+  /** Screen height (0 bottom … 1 top) of the true horizon, so painted hills sit on the water. */
+  setHorizon(y: number): void {
+    this.back.material.uniforms.uHorizon!.value = y;
+  }
 
   setWeather(w: Weather, immediate = false): void {
     this.target = w;

@@ -631,10 +631,10 @@ function pinnedWeatherFromUrl(): Weather | null {
   const w = new URLSearchParams(location.search).get('weather');
   if (!w) return null;
   const base = { ...CALM_NIGHT, mist: 0.2 };
-  if (w === 'aurora') return { ...base, aurora: 1, clouds: 0.05 };
-  if (w === 'rain') return { ...base, rain: 1, clouds: 0.85, mist: 0.4 };
-  if (w === 'snow') return { ...base, snow: 1, clouds: 0.5, mist: 0.5 };
-  if (w === 'mist') return { ...base, mist: 1, clouds: 0.3 };
+  if (w === 'aurora') return { ...base, aurora: 1, clouds: 0.05, wind: 0.5, warmth: 0.8 };
+  if (w === 'rain') return { ...base, rain: 1, clouds: 0.85, mist: 0.4, wind: 0.8, warmth: 0.1, fireflies: 0 };
+  if (w === 'snow') return { ...base, snow: 1, clouds: 0.5, mist: 0.5, wind: 0.2, warmth: 0.3, fireflies: 0 };
+  if (w === 'mist') return { ...base, mist: 1, clouds: 0.3, fireflies: 0.8 };
   return base;
 }
 
