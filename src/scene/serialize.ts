@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS, DEFAULT_TABLE, makeElement } from './defaults';
 import type { ElementKind, SceneElement, SceneModel } from './types';
 
-const KINDS: readonly ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'modulator', 'receptor', 'blocker', 'loom', 'comb'];
+const KINDS: readonly ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'modulator', 'receptor', 'blocker', 'loom', 'comb', 'chord'];
 
 export function serializeScene(scene: SceneModel): string {
   return JSON.stringify(scene, null, 2);

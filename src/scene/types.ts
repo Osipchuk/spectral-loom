@@ -116,12 +116,26 @@ export interface Comb extends BaseElement {
   phase: number;
 }
 
+/**
+ * Chord glass: sits across a rainbow and plays a chord progression. On each chord it lets
+ * swells through only on the colours of that chord's notes — harmony without a punch card.
+ */
+export interface ChordGlass extends BaseElement {
+  kind: 'chord';
+  length: number;
+  /** Progression preset id (see music/chords.ts). */
+  progression: string;
+  beatsPerChord: number;
+  /** How often the chord is struck: once per chord ('hold') or on every step. */
+  rhythm: Subdivision | 'hold';
+}
+
 export interface Blocker extends BaseElement {
   kind: 'blocker';
   length: number;
 }
 
-export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker | Loom | Comb;
+export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker | Loom | Comb | ChordGlass;
 export type ElementKind = SceneElement['kind'];
 export type ElementOf<K extends ElementKind> = Extract<SceneElement, { kind: K }>;
 

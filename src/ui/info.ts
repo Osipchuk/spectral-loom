@@ -34,6 +34,10 @@ export const ELEMENT_INFO: Record<ElementKind, { light: string; music: string }>
     light: 'Catches light that hits its front slit.',
     music: 'The instrument. Every colour it catches is a note; wide apertures catch chords. Tilt it across a rainbow to strum. As Drums, colour picks the drum: red kick, then tom, snare, clap, hat, violet open hat.',
   },
+  chord: {
+    light: 'Stained glass that sits across a rainbow and follows a chord progression: on each chord, swells pass only on the colours of that chord’s notes.',
+    music: 'Harmony without a punch card: pick a progression (C – G – Am – F …) and how long each chord lasts. The name of the current chord glows above the glass.',
+  },
   comb: {
     light: 'An interference comb: light passes only on evenly spaced bright fringes and leaves as thin lines. White light meeting it splits into a few sharp colours, like a diffraction grating.',
     music: 'Turns a smeared cluster of neighbouring notes into a clean chord with space between the notes. More fringes, more notes; phase slides which notes.',

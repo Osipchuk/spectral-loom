@@ -33,6 +33,7 @@ export const PARAMS: { [K in ElementKind]: Params<K> } = {
   receptor: { aperture: 3, instrument: 'pluck', octave: 3, span: 2, voices: 4, gain: 0.8 },
   blocker: { length: 2 },
   comb: { length: 3, fringes: 5, phase: 0 },
+  chord: { length: 4, progression: 'pop', beatsPerChord: 4, rhythm: '1/4' },
   // A new card is not blank: a gentle arpeggio, so it sounds as soon as light reaches a receptor.
   loom: {
     length: 4,

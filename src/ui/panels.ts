@@ -13,11 +13,12 @@ export const ICONS: Record<ElementKind, string> = {
   modulator: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="4" r="1"/><circle cx="20" cy="12" r="1"/><circle cx="12" cy="20" r="1"/><circle cx="4" cy="12" r="1"/><path d="M2 12h20" opacity=".5"/>',
   receptor: '<rect x="14" y="4" width="6" height="16" rx="1.5"/><path d="M14 9v6" stroke-width="2.5"/><path d="M2 12h10" opacity=".6"/>',
   blocker: '<rect x="9" y="3" width="6" height="18" rx="1.5" fill="currentColor" opacity=".35"/><path d="M2 12h6" opacity=".6"/>',
+  chord: '<rect x="9" y="3" width="6" height="18" rx="1"/><path d="M9 8h6M9 13h6" opacity=".7"/><circle cx="12" cy="5.5" r=".8" fill="currentColor"/><circle cx="12" cy="10.5" r=".8" fill="currentColor"/><circle cx="12" cy="16" r=".8" fill="currentColor"/><path d="M2 12h6M16 9l6-2M16 12h6M16 15l6 2" opacity=".5"/>',
   comb: '<rect x="10" y="3" width="4" height="18" rx="1"/><path d="M11 6v12M13 6v12" opacity=".6"/><path d="M2 12h7" opacity=".6"/><path d="M15 9l7-2M15 12h7M15 15l7 2"/>',
   loom: '<rect x="8" y="3" width="8" height="18" rx="1"/><circle cx="10.5" cy="7" r=".9" fill="currentColor"/><circle cx="13.5" cy="10" r=".9" fill="currentColor"/><circle cx="10.5" cy="14" r=".9" fill="currentColor"/><circle cx="13.5" cy="17" r=".9" fill="currentColor"/><path d="M2 12h6M16 12h6" opacity=".5"/>',
 };
 
-export const PALETTE_ORDER: ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'comb', 'modulator', 'loom', 'receptor', 'blocker'];
+export const PALETTE_ORDER: ElementKind[] = ['emitter', 'prism', 'mirror', 'lens', 'filter', 'comb', 'chord', 'modulator', 'loom', 'receptor', 'blocker'];
 
 function fieldRow<T>(field: Field<T>, target: T, onChange: (v: FieldValue) => void): HTMLElement {
   const value = field.get(target);

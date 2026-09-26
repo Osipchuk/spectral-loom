@@ -67,14 +67,13 @@ export const ZOOM_LIMITS = { min: 0.85, max: 3.2 };
 export type Quality = 'eco' | 'balanced' | 'high';
 
 /**
- * What each quality level costs. Balanced is the default: it keeps the look but drops the
- * two most expensive things — rendering above the display's CSS resolution and the extra
- * full-scene pass real glass transmission needs. Eco also halves the frame rate, which
- * leaves the CPU to the audio thread on weak laptops.
+ * What each quality level costs. High is the default. Balanced keeps the look (real glass,
+ * full anti-aliasing) at a slightly lower resolution on high-DPI screens. Eco drops the
+ * extra full-scene pass that real glass transmission needs and draws at 30 fps.
  */
 export const QUALITY: Record<Quality, { maxPixelRatio: number; samples: number; shadows: number; transmission: boolean; motes: number; grass: boolean; fps: number }> = {
-  eco: { maxPixelRatio: 0.75, samples: 0, shadows: 0, transmission: false, motes: 500, grass: false, fps: 30 },
-  balanced: { maxPixelRatio: 1, samples: 2, shadows: 1024, transmission: false, motes: 1200, grass: true, fps: 60 },
+  eco: { maxPixelRatio: 1, samples: 2, shadows: 0, transmission: false, motes: 700, grass: true, fps: 30 },
+  balanced: { maxPixelRatio: 1.5, samples: 4, shadows: 1024, transmission: true, motes: 1500, grass: true, fps: 60 },
   high: { maxPixelRatio: 2, samples: 4, shadows: 2048, transmission: true, motes: 2200, grass: true, fps: 60 },
 };
 
@@ -105,13 +104,13 @@ export class Renderer {
   /** Screen space (CSS px) covered by UI panels; the table is framed in what remains. */
   private insets = { left: 0, right: 0, top: 0, bottom: 0 };
   private basePixelRatio = Math.min(window.devicePixelRatio, 1);
-  quality: Quality = 'balanced';
+  quality: Quality = 'high';
   private pixelRatio = this.basePixelRatio;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
     scene: SceneModel,
-    quality: Quality = 'balanced',
+    quality: Quality = 'high',
   ) {
     this.frame = new TableFrame(scene.table.w, scene.table.h);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });

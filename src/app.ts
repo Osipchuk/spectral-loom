@@ -8,6 +8,7 @@ import { ENVELOPES, envelopeAt } from './audio/instruments';
 import { degreeCount, degreeToMidi, lightToDegree, receptorPitch } from './music/pitch';
 import { lightToRGB } from './render/spectral-color';
 import { midiName, NoteLabels, type NoteLabel } from './ui/note-labels';
+import { ChordLabels } from './ui/chord-labels';
 import { DRUM_BASE_MIDI, DRUM_PIECES } from './audio/drums';
 import { CALM_NIGHT, moodWeather, weatherName, type Weather } from './music/mood';
 import { AUDIO_THRESHOLD } from './timing/arrivals';
@@ -20,7 +21,7 @@ import { QUALITY, Renderer, type Quality } from './render/renderer';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
-import type { Loom, SceneModel } from './scene/types';
+import type { ChordGlass, Loom, SceneModel } from './scene/types';
 import { notesInWindow, planNotes, type NoteTemplate } from './timing/arrivals';
 import { BeatClock } from './timing/clock';
 import { pulseSources, SUBDIVISION_BEATS, type PulseSource } from './timing/sources';
@@ -83,6 +84,7 @@ export class App {
   /** Longest light travel time in the scene, seconds: how far back pulses stay visible. */
   private maxDelayS = 0;
   private noteLabels = new NoteLabels();
+  private chordLabels = new ChordLabels();
   private lastMood = 0;
   private weatherLabel = 'clear night';
   /** `?weather=aurora|rain|snow|mist` pins the sky (for screenshots and debugging). */
@@ -156,7 +158,7 @@ export class App {
     });
     this.overlay = opts.scene ? this.buildOverlay() : this.buildWelcome();
     this.loomEditor = new LoomEditor(this.store, (id) => this.rowsForCard(id));
-    this.root.append(this.noteLabels.el, this.loomEditor.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
+    this.root.append(this.noteLabels.el, this.chordLabels.el, this.loomEditor.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
     this.root.addEventListener('keydown', this.onKey);
@@ -552,6 +554,15 @@ export class App {
 
     this.renderer.render(wall, wall);
     this.noteLabels.update(this.renderer.camera, this.canvas.clientWidth, this.canvas.clientHeight, this.visibleNotes(heard), heard);
+    this.chordLabels.update(
+      this.store.scene.elements.filter((e): e is ChordGlass => e.kind === 'chord'),
+      beat,
+      this.store.scene.settings,
+      (g) => this.renderer.frame.toWorld(g.pos, 1.25),
+      this.renderer.camera,
+      this.canvas.clientWidth,
+      this.canvas.clientHeight,
+    );
     this.updateStats(wall);
   }
 
@@ -769,7 +780,7 @@ function loadQuality(): Quality {
   } catch {
     // Storage can be unavailable (private mode, sandboxed iframe): fall back to the default.
   }
-  return 'balanced';
+  return 'high';
 }
 
 function saveQuality(q: Quality): void {

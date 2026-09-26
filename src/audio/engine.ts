@@ -311,31 +311,50 @@ type MonoVoice = Tone.Synth | Tone.MonoSynth | Tone.FMSynth;
 class VoicePool implements Player {
   readonly output: Tone.Gain;
   private voices: { synth: MonoVoice; busyUntil: number; lastStart: number }[] = [];
+  private gc: number;
 
+  /**
+   * Voices are created only when a note needs one (up to `max`) and disposed after sitting
+   * idle: every Tone synth keeps several audio nodes running even when silent, so a pool
+   * of pre-built voices per receptor would overload the audio thread (crackle, slow-down).
+   */
   constructor(
-    context: Tone.BaseContext,
-    size: number,
-    make: () => MonoVoice,
+    private context: Tone.BaseContext,
+    private max: number,
+    private make: () => MonoVoice,
     private releaseS: number,
   ) {
     this.output = new Tone.Gain({ gain: 1, context });
-    for (let i = 0; i < size; i++) {
-      const synth = make();
-      synth.connect(this.output);
-      this.voices.push({ synth, busyUntil: 0, lastStart: -Infinity });
-    }
+    this.gc = context.setInterval(() => this.collect(), 2);
   }
 
   play(midi: number, holdS: number, time: number, velocity: number): void {
     // Only voices whose last attack is strictly earlier can take this note (Tone requires
     // monotonic start times per source).
     const usable = this.voices.filter((v) => v.lastStart < time - 0.001);
-    if (usable.length === 0) return;
-    const free = usable.find((v) => v.busyUntil <= time);
-    const v = free ?? usable.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b));
+    let v = usable.find((x) => x.busyUntil <= time);
+    if (!v && this.voices.length < this.max) {
+      const synth = this.make();
+      synth.connect(this.output);
+      v = { synth, busyUntil: 0, lastStart: -Infinity };
+      this.voices.push(v);
+    }
+    // All busy: steal the one that frees up soonest.
+    v ??= usable.length ? usable.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b)) : undefined;
+    if (!v) return;
     v.synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity);
     v.busyUntil = time + holdS + this.releaseS + 0.05;
     v.lastStart = time;
+  }
+
+  /** Dispose voices that have been silent for a while (keep one warm). */
+  private collect(): void {
+    const now = this.context.rawContext.currentTime;
+    const idle = this.voices.filter((v) => v.busyUntil < now - 3);
+    for (const v of idle.slice(0, Math.max(0, idle.length - 1))) {
+      v.synth.dispose();
+      this.voices.splice(this.voices.indexOf(v), 1);
+    }
   }
 
   release(time: number): void {
@@ -346,7 +365,9 @@ class VoicePool implements Player {
   }
 
   dispose(): void {
+    this.context.clearInterval(this.gc);
     for (const v of this.voices) v.synth.dispose();
+    this.voices = [];
     this.output.dispose();
   }
 }
@@ -365,7 +386,7 @@ function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player
   if (instrument === 'pad') {
     return new VoicePool(
       context,
-      10,
+      8,
       () => new Tone.Synth({ context, oscillator: { type: 'fatsawtooth', count: 3, spread: 22 }, envelope: { ...env } }),
       env.release,
     );
@@ -373,7 +394,7 @@ function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player
   if (instrument === 'pluck') {
     return new VoicePool(
       context,
-      12,
+      8,
       () =>
         new Tone.MonoSynth({
           context,
@@ -387,7 +408,7 @@ function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player
   }
   return new VoicePool(
     context,
-    12,
+    8,
     () =>
       new Tone.FMSynth({
         context,

@@ -1,3 +1,4 @@
+import { PROGRESSIONS } from '../music/chords';
 import { NOTE_NAMES } from '../music/scales';
 import type { ElementKind, GlobalSettings, SceneElement } from '../scene/types';
 
@@ -176,6 +177,25 @@ export const ELEMENT_FIELDS: Record<ElementKind, Field<SceneElement>[]> = {
     num('gain', 'Level', 0.1, 1, 0.05, pct),
   ],
   blocker: [rotation, num('length', 'Length', 0.5, 10, 0.5, cells)],
+  chord: [
+    rotation,
+    num('length', 'Length', 1, 12, 0.5, cells),
+    sel(
+      'progression',
+      'Chords',
+      PROGRESSIONS.map((p) => [p.id, p.label.startsWith('Canon') ? 'Canon' : p.label.replace(/ /g, '')] as [string, string]),
+    ),
+    sel('beatsPerChord', 'Each chord', [
+      ['2', '½ bar'],
+      ['4', '1 bar'],
+      ['8', '2 bars'],
+    ]),
+    sel('rhythm', 'Strike', [
+      ['hold', 'Hold'],
+      ['1/4', '1/4'],
+      ['1/8', '1/8'],
+    ]),
+  ],
   comb: [
     rotation,
     num('length', 'Length', 1, 10, 0.5, cells),
@@ -294,6 +314,7 @@ export const KIND_LABELS: Record<ElementKind, string> = {
   blocker: 'Blocker',
   loom: 'Loom card',
   comb: 'Interference comb',
+  chord: 'Chord glass',
 };
 
 const HELP: Record<string, string> = {
@@ -328,6 +349,10 @@ const HELP: Record<string, string> = {
   "loom.length": "How wide the card is across the rainbow.",
   "loom.subdivision": "How long one step of the card is.",
   "loom.depth": "How strongly the card's swells brighten the light.",
+  "chord.length": "How wide the glass is across the rainbow.",
+  "chord.progression": "The chord sequence. Roman numerals count steps of the scale: I is home, IV and V lead away, vi is the sad relative. The glass lets through only the colours of the current chord.",
+  "chord.beatsPerChord": "How long each chord lasts before the glass moves to the next one.",
+  "chord.rhythm": "Hold plays each chord once and lets it ring; 1/4 and 1/8 strike it on every beat or half-beat.",
   "comb.length": "How wide the comb is across the light.",
   "comb.fringes": "How many bright fringes span the rainbow. Each fringe lets one thin colour through: more fringes, more notes in the chord.",
   "comb.phase": "Slides the fringes along the spectrum, so a different set of colours (notes) gets through.",

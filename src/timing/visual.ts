@@ -75,7 +75,7 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
       const seg: RayTree['segments'][number] = tree.segments[id]!;
       const prev = instrumentOf.get(id);
       if (!prev || RELEASE_RANK[r.instrument] > RELEASE_RANK[prev]) instrumentOf.set(id, r.instrument);
-      if (src?.kind === 'loom' && seg.pulseSourceId === src.id) degreeOf.set(id, deg);
+      if ((src?.kind === 'loom' || src?.kind === 'chord') && seg.pulseSourceId === src.id) degreeOf.set(id, deg);
       id = seg.parent;
     }
   }
@@ -84,7 +84,7 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
   for (const seg of tree.segments) {
     const src = byId.get(seg.pulseSourceId);
     let ch: number;
-    if (src?.kind === 'loom') {
+    if (src?.kind === 'loom' || src?.kind === 'chord') {
       const deg = degreeOf.get(seg.id);
       // Loom light that never reaches a receptor has no pitch: it only carries the base glow.
       ch = deg === undefined ? -1 : channel(src.id, deg);

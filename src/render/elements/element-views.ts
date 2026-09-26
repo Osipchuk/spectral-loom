@@ -161,6 +161,58 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       break;
     }
 
+    case 'chord': {
+      // Stained glass: panes of spectral colour between lead lines.
+      const c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 64;
+      const g = c.getContext('2d')!;
+      const panes = 7;
+      for (let i = 0; i < panes; i++) {
+        const [r, gg, b] = bandToRGB(700 - (300 * (i + 1)) / panes, 700 - (300 * i) / panes);
+        const max = Math.max(r, gg, b, 1e-3);
+        g.fillStyle = `rgb(${Math.round((r / max) * 200)},${Math.round((gg / max) * 200)},${Math.round((b / max) * 200)})`;
+        g.fillRect((i * c.width) / panes, 0, c.width / panes, c.height);
+      }
+      g.fillStyle = '#1a1510';
+      for (let i = 0; i <= panes; i++) g.fillRect((i * c.width) / panes - 2, 0, 4, c.height);
+      g.fillRect(0, 0, c.width, 4);
+      g.fillRect(0, c.height - 4, c.width, 4);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const glassMat = new THREE.MeshPhysicalMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0.8,
+        roughness: 0.2,
+        metalness: 0,
+        emissive: new THREE.Color(0xffffff),
+        emissiveMap: tex,
+        emissiveIntensity: disabled ? 0 : 0.18,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      owned.push(glassMat);
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(el.length, 0.85), disabled ? mats.ghost : glassMat);
+      pane.rotation.y = Math.PI / 2;
+      pane.position.y = 0.52;
+      group.add(pane);
+      const frame = mesh(new RoundedBoxGeometry(0.12, 0.07, el.length + 0.2, 2, 0.02), m(mats.brass));
+      frame.position.y = 0.06;
+      const top = frame.clone();
+      top.position.y = 0.98;
+      group.add(frame, top);
+      for (const z of [-(el.length / 2 + 0.08), el.length / 2 + 0.08]) {
+        const side = mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.95, 10), m(mats.brass));
+        side.position.set(0, 0.52, z);
+        group.add(side);
+      }
+      pickSize = [0.7, el.length];
+      radius = el.length / 2 + 0.5;
+      group.userData.texture = tex;
+      break;
+    }
+
     case 'comb': {
       const pane = mesh(new RoundedBoxGeometry(0.06, 0.95, el.length, 2, 0.02), m(mats.comb));
       pane.position.y = 0.55;
@@ -325,6 +377,7 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       });
       for (const mat of owned) mat.dispose();
       dynamic.card?.texture.dispose();
+      (group.userData.texture as THREE.Texture | undefined)?.dispose();
       dynamic.card?.alpha.dispose();
     },
   };

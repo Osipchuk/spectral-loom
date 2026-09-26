@@ -1,4 +1,5 @@
 import type { SceneModel, Subdivision } from '../scene/types';
+import { chordDegrees, progression } from '../music/chords';
 import { bjorklund } from './bjorklund';
 
 export const SUBDIVISION_BEATS: Record<Subdivision, number> = { '1/4': 1, '1/8': 0.5, '1/16': 0.25 };
@@ -37,6 +38,20 @@ export function pulseSources(scene: SceneModel): Map<string, PulseSource> {
       const pattern = bjorklund(el.steps, el.hits, el.rotate);
       const events = pattern.flatMap((hit, i) => (hit ? [{ beat: i * step, lenBeats: step, degrees: null, depth: el.depth }] : []));
       out.set(el.id, { id: el.id, loopBeats: Math.max(step, el.steps * step), events });
+    } else if (el.kind === 'chord') {
+      const roots = progression(el.progression);
+      const bpc = Math.max(0.25, Number(el.beatsPerChord));
+      const events: PulseSource['events'] = [];
+      roots.forEach((root, i) => {
+        const degrees = chordDegrees(root, scene.settings.scale);
+        if (el.rhythm === 'hold') {
+          events.push({ beat: i * bpc, lenBeats: bpc, degrees, depth: 0.85 });
+        } else {
+          const step = SUBDIVISION_BEATS[el.rhythm];
+          for (let b = 0; b < bpc - 1e-9; b += step) events.push({ beat: i * bpc + b, lenBeats: step, degrees, depth: 0.8 });
+        }
+      });
+      out.set(el.id, { id: el.id, loopBeats: roots.length * bpc, events });
     } else if (el.kind === 'loom') {
       const step = SUBDIVISION_BEATS[el.subdivision];
       // Notes starting together become one pulse carrying a chord.

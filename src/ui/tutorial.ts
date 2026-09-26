@@ -25,20 +25,23 @@ const TWINKLE =
 
 const ORIGIN = { x: 7, y: 16 };
 const P = chainPoints(ORIGIN, 0);
-const rad = (d: number): number => (d * Math.PI) / 180;
 
-/** Where each tutorial element goes. */
-const TARGETS = {
+/**
+ * Where each tutorial element goes. The receptor is deliberately narrow: it catches only
+ * part of the rainbow, so turning the prism or moving the receptor audibly changes the chord.
+ */
+export const TARGETS = {
   emitter: el('emitter', 'tut-emitter', ORIGIN.x, ORIGIN.y, 0, { pulse: '1/4' }),
   prism: el('prism', 'tut-prism', ...P.place(7, 0), 70, { size: 4 }),
   receptor: el('receptor', 'tut-receptor', ...P.alongFan(12), P.fan + 180 + 16, {
-    aperture: 7,
+    aperture: 2.4,
     instrument: 'pluck',
     octave: 4,
     span: 1,
     voices: 3,
     gain: 0.85,
   }),
+  chord: el('chord', 'tut-chord', ...P.alongFan(7.5), P.fan, { length: 4.2, progression: 'pop', beatsPerChord: 4, rhythm: '1/4' }),
   loom: el('loom', 'tut-loom', ...P.alongFan(4.5), P.fan, {
     length: 3.4,
     subdivision: '1/4',
@@ -66,9 +69,6 @@ interface Step {
 
 const find = (scene: SceneModel, id: string): SceneElement | undefined => scene.elements.find((e) => e.id === id);
 
-function angleDiff(a: number, b: number): number {
-  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
-}
 
 const STEPS: Step[] = [
   {
@@ -89,45 +89,55 @@ const STEPS: Step[] = [
     title: 'Catch it',
     task: 'Place a Receptor where the rainbow lands (drag it onto the outline, or click the outline). Sound will switch on.',
     result:
-      'Hear the chord? Every colour the receptor catches is one note — the labels beside it name them. It is tilted, so red lands a moment before violet: a strum.',
+      'Hear the chord? Every colour the receptor catches is one note — the labels beside it name them. Its slit is narrow, so it catches only part of the rainbow: a few notes, not all of them.',
     place: 'receptor',
     after: (host) => host.ensureAudio(),
   },
   {
-    title: 'Turn the prism',
+    title: 'Slide across the rainbow',
     task:
-      'Click the prism to select it, then turn it about 10°: scroll the mouse wheel over it, press Q or E, or drag the small round handle on the ring around it. Listen while you turn.',
+      'Drag the receptor sideways, across the rainbow (not towards the prism) — about two cells. Watch the note labels beside it and listen.',
     result:
-      'The rainbow swung across the receptor, so different colours land on it — and the chord changed. Rotating glass chooses which notes play.',
-    done: (s, t) => {
-      const p = find(s, t.idOf('prism'));
-      return !!p && Math.abs(angleDiff(p.rotation, TARGETS.prism.rotation)) >= rad(8);
-    },
-    auto: (store, t) => store.updateElement(t.idOf('prism'), (e) => (e.rotation += rad(12))),
-    restore: true,
-  },
-  {
-    title: 'Move the receptor',
-    task: 'Drag the receptor two or three cells towards the prism, along the rainbow. Keep listening.',
-    result:
-      'Closer to the prism the rainbow is narrower, so fewer colours fit on the slit: fewer notes. They also arrive sooner — light is slow on this table, so distance is time.',
+      'The narrow slit now catches a different slice of the rainbow — other colours, so other notes: a new chord. Where a receptor sits in the light decides what it plays.',
     done: (s, t) => {
       const r = find(s, t.idOf('receptor'));
-      return !!r && dist(r.pos, TARGETS.receptor.pos) >= 2;
+      if (!r) return false;
+      const across = { x: -Math.sin(TARGETS.receptor.rotation), y: Math.cos(TARGETS.receptor.rotation) };
+      const d = { x: r.pos.x - TARGETS.receptor.pos.x, y: r.pos.y - TARGETS.receptor.pos.y };
+      return Math.abs(d.x * across.x + d.y * across.y) >= 1.5;
     },
     auto: (store, t) =>
       store.updateElement(t.idOf('receptor'), (e) => {
-        e.pos = { x: e.pos.x - 2.2, y: e.pos.y + 1.8 };
+        const across = { x: -Math.sin(e.rotation), y: Math.cos(e.rotation) };
+        e.pos = { x: e.pos.x + across.x * 1.8, y: e.pos.y + across.y * 1.8 };
       }),
     restore: true,
+  },
+  {
+    title: 'Chords from glass',
+    task:
+      'Now let the light play a progression by itself: drop a Chord glass across the rainbow, on the outline (or click the outline). Its setting in the right panel picks the chords.',
+    result:
+      'C – G – Am – F. On each chord the glass lets swells through only on the colours of that chord’s notes; its name glows above the glass. (We widened the receptor so it catches the whole rainbow.)',
+    place: 'chord',
+    after: (host) => {
+      // Widen the receptor to the whole rainbow, then switch to a major key (this retraces).
+      for (const e of host.store.scene.elements) {
+        if (e.kind === 'receptor') e.aperture = 7;
+      }
+      host.store.updateSettings({ scale: 'major', root: 0, bpm: 100 });
+    },
   },
   {
     title: 'Write a melody',
     task: 'Drop a Loom card across the rainbow, on the outline near the prism (or click the outline).',
     result:
-      'Now a tune: the card is punched with “Twinkle, Twinkle”. At each step its holes let a swell through on one colour only, so one note plays instead of the whole chord.',
+      'Now a tune: the card is punched with “Twinkle, Twinkle”. At each step its holes let a swell through on one colour only, so one note plays instead of a chord. (Light follows the card or glass nearest the receptor, so we switched the chord glass off — double-click it to bring it back.)',
     place: 'loom',
-    after: (host) => host.store.updateSettings({ scale: 'major', root: 0, bpm: 100 }),
+    after: (host) => {
+      // Light follows the card or glass nearest the receptor, so switch the chord glass off.
+      for (const e of host.store.scene.elements) if (e.kind === 'chord') host.store.updateElement(e.id, (g) => (g.enabled = false), 'toggle');
+    },
   },
   {
     title: 'Punch your own note',
@@ -308,7 +318,7 @@ export class Tutorial {
   }
 
   private restoreAndNext(): void {
-    for (const key of ['prism', 'receptor'] as TargetKey[]) {
+    for (const key of ['receptor'] as TargetKey[]) {
       const t = TARGETS[key];
       this.host.store.updateElement(this.idOf(key), (e) => {
         e.pos = { ...t.pos };

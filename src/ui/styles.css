@@ -281,6 +281,49 @@
   will-change: transform, opacity;
 }
 
+.sl-root .sl-chords {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.sl-root .sl-chord {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(10, 11, 16, 0.72);
+  border: 1px solid rgba(255, 220, 160, 0.45);
+  box-shadow: 0 0 18px rgba(255, 210, 140, 0.25);
+  white-space: nowrap;
+}
+.sl-root .sl-chord-name {
+  font: italic 500 16px/1 var(--sl-serif);
+  color: #fff3dc;
+}
+.sl-root .sl-chord-roman {
+  font: 500 9.5px/1 var(--sl-mono);
+  letter-spacing: 0.08em;
+  color: rgba(255, 230, 190, 0.7);
+}
+.sl-root .sl-chord-pop {
+  animation: sl-chord-pop 0.5s ease-out;
+}
+@keyframes sl-chord-pop {
+  from {
+    box-shadow: 0 0 34px rgba(255, 220, 160, 0.7);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sl-root .sl-chord-pop {
+    animation: none;
+  }
+}
+
 /* ---------- side ---------- */
 .sl-root .sl-side {
   position: absolute;

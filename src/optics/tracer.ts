@@ -365,6 +365,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
 
       case 'modulator':
       case 'loom':
+      case 'chord':
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: c.role };
         child(
           { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId },
