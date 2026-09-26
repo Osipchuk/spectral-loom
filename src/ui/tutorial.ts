@@ -14,6 +14,8 @@ export interface TutorialHost {
   finish(): void;
   /** Called when the card moves between the bottom and the top of the screen. */
   relayout(): void;
+  /** Let the table settle after a placement: a new loom card is cut to the light it sits in. */
+  settle(): void;
 }
 
 /** Drops within this distance of the outline click into place. */
@@ -48,7 +50,20 @@ export const TARGETS = {
     title: 'Twinkle, Twinkle',
     depth: 0.9,
     ...card('major', 0, 4, TWINKLE),
+    // Written in pitches; cut into slots where it lands (a card dropped on it loses old ones).
+    slots: undefined,
   }),
+};
+
+/** How far to turn the prism for the "same holes, new notes" step, and the clockwork after it. */
+export const TUTORIAL_TURN_DEG = 4;
+export const TUTORIAL_SWING = { kind: 'swing', degrees: 5, bars: 4 } as const;
+
+const turnedBy = (scene: SceneModel, id: string): number => {
+  const p = scene.elements.find((e) => e.id === id);
+  if (!p) return 0;
+  const d = ((p.rotation - TARGETS.prism.rotation) * 180) / Math.PI;
+  return Math.abs(((d + 540) % 360) - 180);
 };
 type TargetKey = keyof typeof TARGETS;
 
@@ -63,8 +78,10 @@ interface Step {
   /** "Do it for me" for tasks that are not placements. */
   auto?: (store: SceneStore, t: Tutorial) => void;
   after?: (host: TutorialHost) => void;
-  /** Offer "Put it back" on the result card (restores the target positions). */
-  restore?: boolean;
+  /** Called when the step opens (e.g. to remember the state its task must change). */
+  begin?: (scene: SceneModel, t: Tutorial) => void;
+  /** Offer "Put it back" on the result card: these elements return to their places. */
+  restore?: TargetKey[];
 }
 
 const find = (scene: SceneModel, id: string): SceneElement | undefined => scene.elements.find((e) => e.id === id);
@@ -111,7 +128,7 @@ const STEPS: Step[] = [
         const across = { x: -Math.sin(e.rotation), y: Math.cos(e.rotation) };
         e.pos = { x: e.pos.x + across.x * 1.8, y: e.pos.y + across.y * 1.8 };
       }),
-    restore: true,
+    restore: ['receptor'],
   },
   {
     title: 'Chords from glass',
@@ -132,26 +149,50 @@ const STEPS: Step[] = [
     title: 'Write a melody',
     task: 'Drop a Loom card across the rainbow, on the outline near the prism (or click the outline).',
     result:
-      'Now a tune: the card is punched with “Twinkle, Twinkle”. At each step its holes let a swell through on one colour only, so one note plays instead of a chord. (Light follows the card or glass nearest the receptor, so we switched the chord glass off — double-click it to bring it back.)',
+      'Now a tune: “Twinkle, Twinkle”. The card was cut where it sits: one slot for each colour crossing it, and at each step a hole opens one slot, so one colour swells and one note plays. (Light follows the card or glass nearest the receptor, so we switched the chord glass off — double-click it to bring it back.)',
     place: 'loom',
     after: (host) => {
       // Light follows the card or glass nearest the receptor, so switch the chord glass off.
       for (const e of host.store.scene.elements) if (e.kind === 'chord') host.store.updateElement(e.id, (g) => (g.enabled = false), 'toggle');
+      host.settle();
     },
   },
   {
     title: 'Punch your own note',
     task:
-      'Click the card to open its editor at the bottom. Each row is a colour that reaches the receptor. Click an empty cell to punch a hole — drag right to hold it longer — or click a hole to remove it.',
-    result: 'That note is now part of the melody: the card plays whatever you punch. Try Compose ✦ in the editor for a fresh tune.',
+      'Click the card to open its editor at the bottom. Each row is a slot in the card, named after the colour falling through it. Click an empty cell to punch a hole — drag right to hold it longer — or click a hole to remove it.',
+    result: 'That note is now part of the melody. Try Compose ✦ in the editor for a fresh tune.',
+    begin: (s, t) => {
+      const l = find(s, t.idOf('loom'));
+      t.baseline = l?.kind === 'loom' ? JSON.stringify(l.notes) : '';
+    },
     done: (s, t) => {
       const l = find(s, t.idOf('loom'));
-      return !!l && l.kind === 'loom' && JSON.stringify(l.notes) !== JSON.stringify(TARGETS.loom.notes);
+      return !!l && l.kind === 'loom' && JSON.stringify(l.notes) !== t.baseline;
     },
     auto: (store, t) =>
       store.updateElement(t.idOf('loom'), (e) => {
-        if (e.kind === 'loom') e.notes = [...e.notes, { at: 14, deg: 7, len: 2 }];
+        if (e.kind !== 'loom') return;
+        const top = Math.max(0, ...e.notes.map((n) => n.deg));
+        e.notes = [...e.notes, { at: e.steps - 2, deg: Math.max(0, top - 1), len: 2 }];
       }),
+  },
+  {
+    title: 'Same holes, new notes',
+    task: `Now leave the card alone and turn the prism a little: select it and press E (or scroll over it) — ${TUTORIAL_TURN_DEG} degrees or so. Watch the editor's row names and listen.`,
+    result:
+      'The card did not change — the light did. Turning the prism slid the rainbow along the card, so other colours now fall through the same holes: the tune keeps its rhythm but its notes shift. On this table the glass decides the notes; the card only decides when.',
+    done: (s, t) => turnedBy(s, t.idOf('prism')) >= 2,
+    auto: (store, t) => store.updateElement(t.idOf('prism'), (e) => (e.rotation += (TUTORIAL_TURN_DEG * Math.PI) / 180)),
+    restore: ['prism'],
+  },
+  {
+    title: 'Clockwork',
+    task: 'Let the glass move by itself: select the prism and, in the panel on the right, set Motion to Swing.',
+    result:
+      'The prism now rocks to and fro every few bars, and the rainbow sweeps along the card as it goes: the same holes play a line that bends up and down on its own. Any piece of glass can swing or turn — try a mirror or the receptor.',
+    done: (s, t) => !!find(s, t.idOf('prism'))?.motion,
+    auto: (store, t) => store.updateElement(t.idOf('prism'), (e) => (e.motion = { ...TUTORIAL_SWING })),
   },
   {
     title: 'Change the voice',
@@ -177,6 +218,8 @@ export class Tutorial {
   private index = 0;
   private phase: 'task' | 'result' = 'task';
   private placed = new Map<string, string>();
+  /** State the current task is expected to change (see Step.begin). */
+  baseline = '';
   private unsubscribe: () => void;
   private title: HTMLElement;
   private text: HTMLElement;
@@ -246,7 +289,7 @@ export class Tutorial {
       this.counter.textContent = 'Done';
       this.title.textContent = 'You built an instrument.';
       this.text.textContent =
-        'Everything you hear comes from where the light goes. Keep playing with this table, or open a finished one to see what else light can do.';
+        'Everything you hear comes from where the light goes: the card says when, the glass says what. Keep playing with this table, or open a finished one to see what else light can do.';
       this.actions.append(
         this.button('Afterglow', () => this.host.openDemo('afterglow'), 'primary'),
         this.button('Gymnopédie', () => this.host.openDemo('gymnopedie')),
@@ -262,7 +305,7 @@ export class Tutorial {
       this.text.textContent = step.result;
       this.host.setGhost(null);
       this.host.highlight(null);
-      if (step.restore) this.actions.append(this.button('Put it back & continue', () => this.restoreAndNext(), 'primary'));
+      if (step.restore) this.actions.append(this.button('Put it back & continue', () => this.restoreAndNext(step.restore!), 'primary'));
       else this.actions.append(this.button('Next', () => this.next(), 'primary'));
       this.actions.append(this.button('Skip tutorial', () => this.close(), 'quiet'));
       return;
@@ -317,8 +360,8 @@ export class Tutorial {
     this.show();
   }
 
-  private restoreAndNext(): void {
-    for (const key of ['receptor'] as TargetKey[]) {
+  private restoreAndNext(keys: TargetKey[]): void {
+    for (const key of keys) {
       const t = TARGETS[key];
       this.host.store.updateElement(this.idOf(key), (e) => {
         e.pos = { ...t.pos };
@@ -331,6 +374,7 @@ export class Tutorial {
   private next(): void {
     this.index += 1;
     this.phase = 'task';
+    this.step?.begin?.(this.host.store.scene, this);
     this.show();
   }
 

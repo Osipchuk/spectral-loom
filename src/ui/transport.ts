@@ -1,4 +1,5 @@
 import type { DemoScene } from '../scene/demos';
+import type { EngineVersion } from '../scene/types';
 import { h, svgIcon } from './dom';
 
 const PLAY = '<path d="M7 5l12 7-12 7z" fill="currentColor" stroke="none"/>';
@@ -16,6 +17,7 @@ export interface TransportCallbacks {
   onRecord(): void;
   onVolume(db: number): void;
   onQuality(q: 'eco' | 'balanced' | 'high'): void;
+  onEngine(engine: EngineVersion): void;
 }
 
 /** Top bar: play, scene picker, save/load, record, volume; plus the scene caption. */
@@ -25,6 +27,7 @@ export class Transport {
   private playBtn: HTMLButtonElement;
   private recordBtn: HTMLButtonElement;
   private select: HTMLSelectElement;
+  private engineSel: HTMLSelectElement;
   private beatDots: HTMLElement[] = [];
 
   constructor(
@@ -50,6 +53,18 @@ export class Transport {
     }
     this.select.append(h('option', { value: '__custom', text: 'Custom scene', hidden: true }));
     this.select.addEventListener('change', () => cb.onDemo(this.select.value));
+
+    this.engineSel = h('select.sl-select.sl-engine', {
+      'aria-label': 'Engine',
+      title: 'V1: loom cards hold notes, the light only carries them. V2: cards hold slots, and the colour falling through a slot is the note — move the glass and the music changes.',
+    });
+    for (const [v, t] of [
+      ['1', 'V1 · card plays'],
+      ['2', 'V2 · light plays'],
+    ]) {
+      this.engineSel.append(h('option', { value: v, text: t }));
+    }
+    this.engineSel.addEventListener('change', () => cb.onEngine(this.engineSel.value === '2' ? 2 : 1));
 
     const file = h('input', { type: 'file', accept: 'application/json,.json', hidden: true });
     file.addEventListener('change', () => {
@@ -92,6 +107,7 @@ export class Transport {
       beats,
       h('span.sl-sep'),
       this.select,
+      this.engineSel,
       h('span.sl-sep'),
       save,
       load,
@@ -109,6 +125,10 @@ export class Transport {
     this.playBtn.replaceChildren(svgIcon(playing ? PAUSE : PLAY));
     this.playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     this.playBtn.classList.toggle('sl-on', playing);
+  }
+
+  setEngine(engine: EngineVersion): void {
+    this.engineSel.value = String(engine);
   }
 
   setRecording(busy: boolean): void {

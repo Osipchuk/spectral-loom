@@ -1,7 +1,7 @@
 import * as Tone from 'tone';
 import { midiToFrequency } from '../music/pitch';
 import type { Instrument } from '../scene/types';
-import { notesInWindow, type NoteEvent, type NoteTemplate } from '../timing/arrivals';
+import { notesInWindow, type NoteEvent, type NoteTemplate, type PlanByLaunch } from '../timing/arrivals';
 import { BeatClock } from '../timing/clock';
 import type { PulseSource } from '../timing/sources';
 import { DRUM_BASE_MIDI, DrumKit } from './drums';
@@ -28,20 +28,32 @@ interface Bus {
   input: Tone.Gain;
 }
 
+/** Where one note sits: its own tone (low-pass cutoff, Hz) and stereo position. */
+interface NotePlace {
+  cutoff: number;
+  pan: number;
+}
+
 /** Anything a receptor can play through: a polyphonic synth or the drum kit. */
 interface Player {
-  play(midi: number, holdS: number, time: number, velocity: number): void;
+  play(midi: number, holdS: number, time: number, velocity: number, place: NotePlace): void;
   release(time: number): void;
   output: Tone.ToneAudioNode;
   dispose(): void;
+  /** True when every note gets its own tone and stereo position (pooled synths). */
+  readonly perNote: boolean;
 }
 
-/** Each receptor has its own player, tone filter and stereo position. */
+/**
+ * Each receptor has its own player. Synth voices carry their own filter and panner, so the
+ * notes of a chord sit where their colours land; the drum kit is one instrument, so it has
+ * one filter and panner for the receptor.
+ */
 interface ReceptorVoice {
   instrument: Instrument;
   player: Player;
-  filter: Tone.Filter;
-  panner: Tone.Panner;
+  filter: Tone.Filter | null;
+  panner: Tone.Panner | null;
 }
 
 /** Filter cutoff for a receptor: diffuse light sounds warm, focused light bright. */
@@ -73,6 +85,8 @@ export class AudioEngine {
   private interval: number | null = null;
   private scheduledUntil = 0;
   private templates: NoteTemplate[] = [];
+  /** Moving optics: templates by pulse launch (null when nothing moves). */
+  private moving: PlanByLaunch | null = null;
   private sources = new Map<string, PulseSource>();
   private recent: ScheduledNote[] = [];
   playing = false;
@@ -141,8 +155,9 @@ export class AudioEngine {
     this.nodes.push(limiter, comp, reverb, delay, dry, master);
   }
 
-  setPlan(templates: NoteTemplate[], sources: Map<string, PulseSource>): void {
+  setPlan(templates: NoteTemplate[], sources: Map<string, PulseSource>, moving: PlanByLaunch | null = null): void {
     this.templates = templates;
+    this.moving = moving;
     this.sources = sources;
     // Retire voices of receptors that no longer receive light (let their tails ring out).
     const live = new Set(templates.map((t) => `${t.receptorId}|${t.instrument}`));
@@ -157,8 +172,8 @@ export class AudioEngine {
 
   private disposeVoice(v: ReceptorVoice): void {
     v.player.dispose();
-    v.filter.dispose();
-    v.panner.dispose();
+    v.filter?.dispose();
+    v.panner?.dispose();
   }
 
   private voiceFor(receptorId: string, instrument: Instrument): ReceptorVoice | null {
@@ -167,10 +182,16 @@ export class AudioEngine {
     if (existing && existing.instrument === instrument) return existing;
     const context = this.ctx;
     const player = createPlayer(instrument, context);
-    const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12, context });
-    const panner = new Tone.Panner({ pan: 0, context });
-    player.output.chain(filter, panner, this.buses[instrument].input);
-    const v = { instrument, player, filter, panner };
+    let v: ReceptorVoice;
+    if (player.perNote) {
+      player.output.connect(this.buses[instrument].input);
+      v = { instrument, player, filter: null, panner: null };
+    } else {
+      const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12, context });
+      const panner = new Tone.Panner({ pan: 0, context });
+      player.output.chain(filter, panner, this.buses[instrument].input);
+      v = { instrument, player, filter, panner };
+    }
     this.receptorVoices.set(receptorId, v);
     return v;
   }
@@ -237,8 +258,19 @@ export class AudioEngine {
    */
   scheduleBeats(fromBeat: number, toBeat: number, now: number, firstLaunch = -Infinity): void {
     if (!this.buses) return;
-    const events = notesInWindow(this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
+    const events = notesInWindow(this.moving ?? this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
     this.scheduledUntil = toBeat;
+    // The drum kit has one tone filter and one panner per receptor: hits struck together
+    // share them, set to their loudness-weighted average. Synth notes each have their own.
+    const shared = new Map<string, { w: number; brightness: number; pan: number }>();
+    for (const e of events) {
+      const key = `${e.receptorId}|${e.beat}`;
+      const a = shared.get(key) ?? { w: 0, brightness: 0, pan: 0 };
+      a.w += e.velocity;
+      a.brightness += e.brightness * e.velocity;
+      a.pan += e.pan * e.velocity;
+      shared.set(key, a);
+    }
     for (const e of events) {
       let time = this.clock.timeAt(e.beat);
       if (time < now - LATE_TOLERANCE_S) continue;
@@ -247,9 +279,13 @@ export class AudioEngine {
       const v = this.voiceFor(e.receptorId, e.instrument);
       if (!v) continue;
       try {
-        v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, e.brightness), Math.max(now, time - 0.05), 0.08);
-        v.panner.pan.setTargetAtTime(e.pan, Math.max(now, time - 0.05), 0.1);
-        v.player.play(e.midi, holdS, time, e.velocity);
+        if (v.filter && v.panner) {
+          const mix = shared.get(`${e.receptorId}|${e.beat}`)!;
+          const w = Math.max(1e-6, mix.w);
+          v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, mix.brightness / w), Math.max(now, time - 0.05), 0.08);
+          v.panner.pan.setTargetAtTime(mix.pan / w, Math.max(now, time - 0.05), 0.1);
+        }
+        v.player.play(e.midi, holdS, time, e.velocity, { cutoff: cutoffFor(e.instrument, e.brightness), pan: e.pan });
       } catch (err) {
         // A broken voice must not silence the instrument: drop it, the next note rebuilds it.
         console.warn('Spectral Loom: voice failed, rebuilding', err);
@@ -308,9 +344,19 @@ export class AudioEngine {
 /** The monophonic synths a pool is built from. */
 type MonoVoice = Tone.Synth | Tone.MonoSynth | Tone.FMSynth;
 
+/** One pooled voice: a synth with its own tone filter and stereo position. */
+interface PoolVoice {
+  synth: MonoVoice;
+  filter: Tone.Filter;
+  panner: Tone.Panner;
+  busyUntil: number;
+  lastStart: number;
+}
+
 class VoicePool implements Player {
   readonly output: Tone.Gain;
-  private voices: { synth: MonoVoice; busyUntil: number; lastStart: number }[] = [];
+  readonly perNote = true;
+  private voices: PoolVoice[] = [];
   private gc: number;
 
   /**
@@ -328,20 +374,27 @@ class VoicePool implements Player {
     this.gc = context.setInterval(() => this.collect(), 2);
   }
 
-  play(midi: number, holdS: number, time: number, velocity: number): void {
+  play(midi: number, holdS: number, time: number, velocity: number, place: NotePlace): void {
     // Only voices whose last attack is strictly earlier can take this note (Tone requires
     // monotonic start times per source).
     const usable = this.voices.filter((v) => v.lastStart < time - 0.001);
     let v = usable.find((x) => x.busyUntil <= time);
     if (!v && this.voices.length < this.max) {
       const synth = this.make();
-      synth.connect(this.output);
-      v = { synth, busyUntil: 0, lastStart: -Infinity };
+      const filter = new Tone.Filter({ type: 'lowpass', frequency: place.cutoff, Q: 0.6, rolloff: -12, context: this.context });
+      const panner = new Tone.Panner({ pan: place.pan, context: this.context });
+      synth.chain(filter, panner, this.output);
+      v = { synth, filter, panner, busyUntil: 0, lastStart: -Infinity };
       this.voices.push(v);
     }
     // All busy: steal the one that frees up soonest.
     v ??= usable.length ? usable.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b)) : undefined;
     if (!v) return;
+    // Glide tone and position into place just before the attack (a stolen voice may still
+    // be ringing elsewhere; a short glide avoids a click).
+    const at = Math.max(this.context.rawContext.currentTime, time - 0.012);
+    v.filter.frequency.setTargetAtTime(place.cutoff, at, 0.004);
+    v.panner.pan.setTargetAtTime(place.pan, at, 0.004);
     v.synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity);
     v.busyUntil = time + holdS + this.releaseS + 0.05;
     v.lastStart = time;
@@ -352,7 +405,7 @@ class VoicePool implements Player {
     const now = this.context.rawContext.currentTime;
     const idle = this.voices.filter((v) => v.busyUntil < now - 3);
     for (const v of idle.slice(0, Math.max(0, idle.length - 1))) {
-      v.synth.dispose();
+      disposePoolVoice(v);
       this.voices.splice(this.voices.indexOf(v), 1);
     }
   }
@@ -366,10 +419,16 @@ class VoicePool implements Player {
 
   dispose(): void {
     this.context.clearInterval(this.gc);
-    for (const v of this.voices) v.synth.dispose();
+    for (const v of this.voices) disposePoolVoice(v);
     this.voices = [];
     this.output.dispose();
   }
+}
+
+function disposePoolVoice(v: PoolVoice): void {
+  v.synth.dispose();
+  v.filter.dispose();
+  v.panner.dispose();
 }
 
 function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player {
@@ -380,6 +439,7 @@ function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player
       release: () => {},
       output: kit.output,
       dispose: () => kit.dispose(),
+      perNote: false,
     };
   }
   const env = ENVELOPES[instrument];

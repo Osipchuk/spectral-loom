@@ -28,7 +28,7 @@ export const ELEMENT_INFO: Record<ElementKind, { light: string; music: string }>
   },
   loom: {
     light: 'A punched card across a rainbow. Its holes let swells through on chosen colours only.',
-    music: 'Plays a written melody: each hole is a note at a step. This is how the classics are played.',
+    music: 'Plays a written rhythm and melody: each hole opens its row at a step. On V1 a row is a note; on V2 a row is a slot in the card, and the note is whichever colour falls through it — move the glass and the tune changes.',
   },
   receptor: {
     light: 'Catches light that hits its front slit.',

@@ -22,6 +22,7 @@ export function parseScene(json: string | unknown): SceneModel {
   }
   const table = isObject(raw.table) ? { ...DEFAULT_TABLE, ...raw.table } : { ...DEFAULT_TABLE };
   const settings = { ...DEFAULT_SETTINGS, ...(isObject(raw.settings) ? raw.settings : {}) };
+  settings.engine = settings.engine === 2 ? 2 : 1;
   const elements: SceneElement[] = [];
   for (const e of raw.elements) {
     if (!isObject(e) || !KINDS.includes(e.kind as ElementKind) || !isObject(e.pos)) continue;

@@ -6,9 +6,14 @@ import { readableRGB } from '../render/spectral-color';
 import { h } from './dom';
 import { helpIcon } from './panels';
 
-/** One playable row of the card: a pitch (or drum) that reaches a receptor through it. */
+/**
+ * One row of the card. Engine 1: a pitch (or drum) that reaches a receptor through it, and
+ * `deg` is that scale degree. Engine 2: a slot cut through the card, `deg` is the slot index
+ * and `pitch` the degree of the colour falling through it now (none if it is dark).
+ */
 export interface LoomRow {
   deg: number;
+  pitch?: number;
   label: string;
   rgb: [number, number, number];
 }
@@ -18,6 +23,8 @@ export interface LoomRows {
   kit: boolean;
   /** False when no receptor hears this card yet (rows are then a generic guess). */
   connected: boolean;
+  /** Engine 2: rows are slots, and the light decides what they play. */
+  slots?: boolean;
 }
 
 const ROW_H = 17;
@@ -48,9 +55,12 @@ export class LoomEditor {
   private playStep = -1;
   private dpr = 1;
 
+  private recutBtn: HTMLButtonElement;
+
   constructor(
     private store: SceneStore,
     private rowsFor: (loomId: string) => LoomRows,
+    onRecut: (loomId: string) => void,
   ) {
     this.title = h('span.sl-le-title');
     this.stepsSel = h('select.sl-le-select', { 'aria-label': 'Steps' });
@@ -77,6 +87,14 @@ export class LoomEditor {
     });
     const compose = h('button.sl-btn.sl-btn-primary', { type: 'button', text: 'Compose ✦', title: 'Write a new pattern for me' });
     compose.addEventListener('click', () => this.compose());
+    this.recutBtn = h('button.sl-btn', {
+      type: 'button',
+      text: 'Cut to light',
+      title: 'Freeze what you hear: cut the slots again around the colours crossing the card now, one colour per slot',
+    });
+    this.recutBtn.addEventListener('click', () => {
+      if (this.loomId) onRecut(this.loomId);
+    });
     const clear = h('button.sl-btn', { type: 'button', text: 'Clear' });
     clear.addEventListener('click', () => this.update((l) => (l.notes = [])));
     const close = h('button.sl-btn.sl-btn-quiet', { type: 'button', text: 'Done', 'aria-label': 'Close editor' });
@@ -105,6 +123,7 @@ export class LoomEditor {
         this.subSel,
         this.presetSel,
         compose,
+        this.recutBtn,
         clear,
         close,
       ),
@@ -151,9 +170,12 @@ export class LoomEditor {
     this.subSel.value = loom.subdivision;
     this.presetSel.replaceChildren(h('option', { value: '', text: 'Presets…' }));
     for (const p of this.rows.kit ? BEAT_PRESETS : MELODY_PRESETS) this.presetSel.append(h('option', { value: p.id, text: p.label }));
-    this.hint.textContent = this.rows.connected
-      ? `Click to punch a hole, drag right to hold it longer, click a hole to remove it. Rows are the ${this.rows.kit ? 'drums' : 'notes'} this card’s light can reach.`
-      : 'No receptor hears this card yet: put a receptor in its light. Rows below are a guess until then.';
+    this.recutBtn.hidden = !this.rows.slots;
+    this.hint.textContent = this.rows.slots
+      ? 'Rows are slots cut through the card; each plays whatever colour falls through it now. Turn a prism or move the card and the same holes play other notes. Cut to light freezes what you hear: one colour per slot again.'
+      : this.rows.connected
+        ? `Click to punch a hole, drag right to hold it longer, click a hole to remove it. Rows are the ${this.rows.kit ? 'drums' : 'notes'} this card’s light can reach.`
+        : 'No receptor hears this card yet: put a receptor in its light. Rows below are a guess until then.';
     this.draw();
   }
 
@@ -177,8 +199,25 @@ export class LoomEditor {
     this.refresh();
   }
 
+  /** Pitches the card can play now (scale degrees). */
   private available(): number[] {
-    return this.rows.rows.map((r) => r.deg);
+    const out = new Set<number>();
+    for (const r of this.rows.rows) {
+      const p = this.rows.slots ? r.pitch : r.deg;
+      if (p !== undefined) out.add(p);
+    }
+    return [...out];
+  }
+
+  /** Card rows for notes written in pitch space; notes with no row for their pitch are dropped. */
+  private toRows(notes: LoomNote[]): LoomNote[] {
+    if (!this.rows.slots) return notes;
+    const rowOf = new Map<number, number>();
+    for (const r of this.rows.rows) if (r.pitch !== undefined && !rowOf.has(r.pitch)) rowOf.set(r.pitch, r.deg);
+    return notes.flatMap((n) => {
+      const deg = rowOf.get(n.deg);
+      return deg === undefined ? [] : [{ ...n, deg }];
+    });
   }
 
   private applyPreset(id: string): void {
@@ -199,7 +238,7 @@ export class LoomEditor {
     }
     this.update((l) => {
       l.steps = preset.steps;
-      l.notes = preset.notes.map((n) => ({ ...n, deg: n.deg + shift }));
+      l.notes = this.toRows(preset.notes.map((n) => ({ ...n, deg: n.deg + shift })));
     });
   }
 
@@ -207,7 +246,7 @@ export class LoomEditor {
     const loom = this.loom;
     if (!loom) return;
     const notes = this.rows.kit ? composeBeat(loom.steps) : composeMelody(loom.steps, this.available());
-    this.update((l) => (l.notes = notes));
+    this.update((l) => (l.notes = this.toRows(notes)));
   }
 
   // ---------------------------------------------------------------- drawing

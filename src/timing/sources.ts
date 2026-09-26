@@ -4,12 +4,16 @@ import { bjorklund } from './bjorklund';
 
 export const SUBDIVISION_BEATS: Record<Subdivision, number> = { '1/4': 1, '1/8': 0.5, '1/16': 0.25 };
 
-/** One swell launched by a pulse source. `degrees: null` means it carries every pitch. */
+/**
+ * One swell launched by a pulse source. `degrees: null` means it carries every pitch;
+ * `slots` (engine-2 cards) opens only those slots of the card, whatever colour crosses them.
+ */
 export interface Pulse {
   sourceId: string;
   beat: number;
   lenBeats: number;
   degrees: number[] | null;
+  slots?: number[];
   depth: number;
 }
 
@@ -62,9 +66,15 @@ export function pulseSources(scene: SceneModel): Map<string, PulseSource> {
         g.degs.push(n.deg);
         byStart.set(n.at, g);
       }
+      // Engine 2: rows of a cut card are slots, not pitches.
+      const slotted = scene.settings.engine === 2 && !!el.slots && el.slots.length > 0;
       const events = [...byStart.entries()]
         .sort((a, b) => a[0] - b[0])
-        .map(([at, g]) => ({ beat: at * step, lenBeats: g.len * step, degrees: g.degs, depth: el.depth }));
+        .map(([at, g]) =>
+          slotted
+            ? { beat: at * step, lenBeats: g.len * step, degrees: null, slots: g.degs, depth: el.depth }
+            : { beat: at * step, lenBeats: g.len * step, degrees: g.degs, depth: el.depth },
+        );
       out.set(el.id, { id: el.id, loopBeats: Math.max(step, el.steps * step), events });
     }
   }

@@ -1,6 +1,7 @@
 import type { ElementKind, ElementOf, GlobalSettings, SceneElement, SceneModel, Vec2 } from './types';
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
+  engine: 1,
   bpm: 96,
   beatsPerBar: 4,
   scale: 'majorPent',
