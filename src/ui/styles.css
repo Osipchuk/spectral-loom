@@ -878,6 +878,34 @@
   color: var(--sl-fg-faint);
 }
 
+.sl-root .sl-zoom {
+  position: absolute;
+  left: 18px;
+  bottom: 38px;
+  display: flex;
+  gap: 4px;
+}
+.sl-root .sl-zbtn {
+  all: unset;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--sl-bg);
+  border: 1px solid var(--sl-line-strong);
+  color: var(--sl-fg-dim);
+  font: 500 14px/1 var(--sl-sans);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+.sl-root .sl-zbtn:hover {
+  color: var(--sl-fg);
+}
+.sl-root .sl-zbtn:focus-visible {
+  outline: 1px solid var(--sl-accent);
+}
+
 /* ---------- footer ---------- */
 .sl-root .sl-keys {
   position: absolute;
@@ -924,4 +952,9 @@
   .sl-root .sl-side {
     width: 210px;
   }
+}
+
+/* Film mode: only the table, its light and the note labels. */
+.sl-root.sl-capture > :not(.sl-canvas):not(.sl-notes) {
+  display: none !important;
 }

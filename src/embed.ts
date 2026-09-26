@@ -1,4 +1,5 @@
 import { App } from './app';
+import { LIGHT_CHANGES_MUSIC } from './capture/timeline';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene } from './scene/serialize';
 import type { SceneModel } from './scene/types';
@@ -33,6 +34,15 @@ export function mount(container: HTMLElement, opts: MountOptions = {}): Spectral
     // Test hook for headless checks: render a demo offline and return WAV bytes as base64.
     (window as unknown as Record<string, unknown>).__spectralLoom = {
       app,
+      captureStart: () => app.captureStart(LIGHT_CHANGES_MUSIC),
+      captureFrame: (t: number) => app.captureFrame(t),
+      duration: LIGHT_CHANGES_MUSIC.duration,
+      async captureWav(): Promise<string> {
+        const bytes = new Uint8Array(await (await app.captureWav()).arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(bin);
+      },
       async renderDemoWav(id: string): Promise<string> {
         app.loadDemo(id);
         const blob = await app.renderLoopWav();

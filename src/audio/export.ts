@@ -1,7 +1,32 @@
 import * as Tone from 'tone';
 import type { NoteTemplate } from '../timing/arrivals';
 import type { PulseSource } from '../timing/sources';
+import { trace } from '../optics/tracer';
+import { planNotes } from '../timing/arrivals';
+import { pulseSources } from '../timing/sources';
+import type { Timeline } from '../capture/timeline';
 import { AudioEngine } from './engine';
+
+/**
+ * Render a scripted film's soundtrack: every 50 ms the scene is re-read from the timeline,
+ * re-traced and re-planned, and that window's notes are scheduled — exactly what the live
+ * engine would have done while someone moved the glass.
+ */
+export async function renderTimelineWav(timeline: Timeline, masterDb: number): Promise<Blob> {
+  const step = 0.05;
+  const bpm = timeline.at(0).settings.bpm;
+  const buffer = await Tone.Offline(async () => {
+    const engine = new AudioEngine(bpm);
+    await engine.buildGraph(masterDb);
+    engine.clock.anchor(0, 0);
+    for (let w = 0; w < timeline.duration; w += step) {
+      const scene = timeline.at(w);
+      engine.setPlan(planNotes(scene, trace(scene)), pulseSources(scene));
+      engine.scheduleBeats(engine.clock.beatAt(w), engine.clock.beatAt(w + step), w - 1, 0);
+    }
+  }, timeline.duration + 3, 2);
+  return encodeWav(buffer.toArray() as Float32Array[] | Float32Array, buffer.sampleRate);
+}
 
 /**
  * Render the instrument offline (faster than real time) with exactly the same graph and

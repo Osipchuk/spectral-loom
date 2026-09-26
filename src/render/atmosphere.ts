@@ -190,7 +190,7 @@ void main() {
   // Motes glint as they tumble: a slow per-mote flicker, only visible inside the light.
   float glint = 0.55 + 0.45 * sin(uTime * (1.3 + fract(vSeed * 17.0) * 2.0) + vSeed * 60.0);
   vec3 ambient = vec3(0.012, 0.013, 0.02);
-  gl_FragColor = vec4((ambient + vLight * 4.0 * glint) * soft, 1.0);
+  gl_FragColor = vec4((ambient * 0.5 + vLight * 2.6 * glint) * soft, 1.0);
 }`;
 
 /**

@@ -7,7 +7,14 @@ import type { PulseSource } from '../timing/sources';
 import { DRUM_BASE_MIDI, DrumKit } from './drums';
 import { ENVELOPES, holdSeconds } from './instruments';
 
-const LOOKAHEAD_S = 0.3;
+/**
+ * How far ahead notes are handed to the audio thread. Generous on purpose: a heavy frame can
+ * block the main thread for a few hundred ms, and anything not yet scheduled by then would
+ * be lost. Scene edits still reach the ear within this window.
+ */
+const LOOKAHEAD_S = 0.8;
+/** Notes up to this late (main thread was stalled) still play, a hair late, instead of vanishing. */
+const LATE_TOLERANCE_S = 0.12;
 const TICK_S = 0.04;
 
 /** A note as scheduled on the audio clock; kept briefly so visuals can react to it. */
@@ -210,7 +217,7 @@ export class AudioEngine {
     const now = this.contextTime();
     const toBeat = this.clock.beatAt(now + LOOKAHEAD_S);
     // If the main thread stalled, skip what is already late rather than bunching it up.
-    const fromBeat = Math.max(this.scheduledUntil, this.clock.beatAt(now));
+    const fromBeat = Math.max(this.scheduledUntil, this.clock.beatAt(now - LATE_TOLERANCE_S));
     if (toBeat <= fromBeat) return;
     this.scheduleBeats(fromBeat, toBeat, now);
   }
@@ -224,8 +231,9 @@ export class AudioEngine {
     const events = notesInWindow(this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
     this.scheduledUntil = toBeat;
     for (const e of events) {
-      const time = this.clock.timeAt(e.beat);
-      if (time < now) continue;
+      let time = this.clock.timeAt(e.beat);
+      if (time < now - LATE_TOLERANCE_S) continue;
+      time = Math.max(time, now + 0.005);
       const holdS = holdSeconds(e.instrument, e.lenBeats * this.clock.secondsPerBeat);
       const v = this.voiceFor(e.receptorId, e.instrument);
       if (!v) continue;

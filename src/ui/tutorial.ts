@@ -60,7 +60,7 @@ interface Step {
 const STEPS: Step[] = [
   {
     title: 'A lamp',
-    text: 'Drag an Emitter from the left onto the glowing outline. It shines a beam of white light, and every beat it sends a swell of brightness down the beam.',
+    text: 'Drag an Emitter from the left onto the glowing outline (or just click the outline). It shines a beam of white light, and every beat it sends a swell of brightness down the beam.',
     place: 'emitter',
   },
   {
@@ -167,6 +167,17 @@ export class Tutorial {
       this.actions.append(h('button.sl-btn', { type: 'button', text: 'Do it for me', onclick: () => this.doIt() }));
     }
     this.actions.append(h('button.sl-btn.sl-btn-quiet', { type: 'button', text: 'Skip tutorial', onclick: () => this.close() }));
+  }
+
+  /** Place the current step's element on its outline; returns its id (for the ghost click). */
+  placeFromGhost(): string | null {
+    const step = this.step;
+    if (!step?.place) return null;
+    const t = structuredClone(TARGETS[step.place]);
+    this.host.store.add(t);
+    this.placed.set(step.place, t.id);
+    this.complete();
+    return t.id;
   }
 
   private doIt(): void {

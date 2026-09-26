@@ -37,33 +37,17 @@ const FinishShader = {
       vec2 c = vUv - 0.5;
       float r2 = dot(c, c);
       // Faint lateral chromatic aberration towards the corners, like a real lens.
-      float ca = 0.004 * r2;
+      float ca = 0.0015 * r2;
       vec3 col;
       col.r = texture2D(tDiffuse, vUv - c * ca).r;
       col.g = texture2D(tDiffuse, vUv).g;
       col.b = texture2D(tDiffuse, vUv + c * ca).b;
-      // Tilt-shift: the table band stays sharp, the world above and below blurs like a
-      // macro photo of a miniature.
-      float blur = smoothstep(0.2, 0.5, abs(vUv.y - 0.47)) * 3.5;
-      if (blur > 0.05) {
-        vec2 px = blur / uResolution;
-        vec3 acc = col;
-        acc += texture2D(tDiffuse, vUv + vec2(px.x, 0.0)).rgb;
-        acc += texture2D(tDiffuse, vUv - vec2(px.x, 0.0)).rgb;
-        acc += texture2D(tDiffuse, vUv + vec2(0.0, px.y)).rgb;
-        acc += texture2D(tDiffuse, vUv - vec2(0.0, px.y)).rgb;
-        acc += texture2D(tDiffuse, vUv + px * 0.7).rgb;
-        acc += texture2D(tDiffuse, vUv - px * 0.7).rgb;
-        acc += texture2D(tDiffuse, vUv + vec2(px.x, -px.y) * 0.7).rgb;
-        acc += texture2D(tDiffuse, vUv + vec2(-px.x, px.y) * 0.7).rgb;
-        col = acc / 9.0;
-      }
       float luma = dot(col, vec3(0.299, 0.587, 0.114));
       col = mix(vec3(luma), col, 1.12);
-      col *= mix(1.0, 0.42, smoothstep(0.08, 0.55, r2 * 1.5));
+      col *= mix(1.0, 0.6, smoothstep(0.12, 0.6, r2 * 1.5));
       // Static-per-frame film grain hides banding in the dark gradients.
       float n = hash(vUv * uResolution + fract(uTime) * 97.0) - 0.5;
-      col += n * 0.012;
+      col += n * 0.006;
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
@@ -71,7 +55,14 @@ const FinishShader = {
 export interface CameraAngles {
   azimuth: number;
   polar: number;
+  /** 1 frames the whole table; larger is closer. */
+  zoom: number;
+  /** Point on the table the camera looks at (world x/z offset from the table centre). */
+  panX: number;
+  panZ: number;
 }
+
+export const ZOOM_LIMITS = { min: 0.85, max: 3.2 };
 
 export const CAMERA_LIMITS = { azimuth: 0.42, polarMin: 0.42, polarMax: 0.86 };
 
@@ -89,7 +80,7 @@ export class Renderer {
   private key: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
   private sky = { top: new THREE.Color(), horizon: new THREE.Color(), fog: new THREE.Color(), moon: new THREE.Color() };
-  readonly angles: CameraAngles = { azimuth: 0, polar: 0.66 };
+  readonly angles: CameraAngles = { azimuth: 0, polar: 0.66, zoom: 1, panX: 0, panZ: 0 };
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private finish: ShaderPass;
@@ -155,7 +146,7 @@ export class Renderer {
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.45, 0.75);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.38, 0.3, 0.85);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.finish = new ShaderPass(FinishShader);
@@ -217,8 +208,9 @@ export class Renderer {
     const margin = 1.6;
     const dW = (w / 2 + margin) / Math.tan(hfov / 2);
     const dH = ((h * Math.cos(polar)) / 2 + margin + 0.6) / Math.tan(vfov / 2);
-    const d = Math.max(dW, dH) * 1.04;
-    const target = new THREE.Vector3(0, 0, 0.6);
+    const d = (Math.max(dW, dH) * 1.04) / this.angles.zoom;
+    this.clampPan();
+    const target = new THREE.Vector3(this.angles.panX, 0, 0.6 + this.angles.panZ);
     this.camera.position.set(
       target.x + d * Math.sin(polar) * Math.sin(azimuth),
       target.y + d * Math.cos(polar),
@@ -226,6 +218,16 @@ export class Renderer {
     );
     this.camera.lookAt(target);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Keep the view over the table when zoomed in; centred when fully zoomed out. */
+  private clampPan(): void {
+    const a = this.angles;
+    const k = Math.max(0, 1 - 1 / a.zoom);
+    const mx = (this.frame.w / 2) * k;
+    const mz = (this.frame.h / 2) * k;
+    a.panX = Math.min(mx, Math.max(-mx, a.panX));
+    a.panZ = Math.min(mz, Math.max(-mz, a.panZ));
   }
 
   syncScene(scene: SceneModel): void {
@@ -239,6 +241,8 @@ export class Renderer {
   }
 
   private ghost: THREE.Group | null = null;
+  /** Pick proxy of the tutorial ghost, if one is shown. */
+  ghostPick: THREE.Object3D | null = null;
   private ghostDispose: (() => void) | null = null;
 
   /** A translucent "place it here" hint for the tutorial, or null to clear it. */
@@ -247,6 +251,7 @@ export class Renderer {
       this.scene.remove(this.ghost);
       this.ghostDispose?.();
       this.ghost = null;
+      this.ghostPick = null;
     }
     if (!el) return;
     const view = createElementView({ ...el, enabled: false }, this.materials);
@@ -257,7 +262,10 @@ export class Renderer {
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.015;
     view.group.add(ring);
-    view.group.remove(view.pick);
+    // The ghost looks like an element, so people grab it: keep a (bigger) pick box on it.
+    view.pick.userData = { ghost: true };
+    view.pick.scale.multiplyScalar(1.4);
+    this.ghostPick = view.pick;
     this.frame.toWorld(el.pos, 0, view.group.position);
     view.group.rotation.y = yawFor(el.rotation);
     this.ghost = view.group;

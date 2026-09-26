@@ -153,8 +153,8 @@ void main() {
     // The swell also widens the glow, so it reads as breathing rather than blinking.
     float glow = exp(-x * x * 0.9 / (1.0 + 2.5 * E));
     float halo = exp(-abs(vOffset) / (0.09 + w * 0.8));
-    vec3 c = vColor * radiance * level * (core * (1.3 + 1.1 * E) + glow * (0.16 + 0.55 * E) * haze);
-    c += vColor * halo * (0.05 + 0.2 * E) * haze * level * min(vParams.x * 6.0, 1.0);
+    vec3 c = vColor * radiance * level * (core * (1.35 + 1.1 * E) + glow * (0.1 + 0.45 * E) * haze);
+    c += vColor * halo * (0.025 + 0.12 * E) * haze * level * min(vParams.x * 6.0, 1.0);
     // Bright cores desaturate towards white, like an overexposed laser line.
     c += vec3(core * (max(radiance * level - 1.3, 0.0) * 0.25 + E * E * 0.35 * min(radiance, 1.5)));
     gl_FragColor = vec4(c * uGain, 1.0);
@@ -162,7 +162,7 @@ void main() {
     float r = 0.35 + w * 1.5;
     float spill = exp(-vOffset * vOffset / (r * r));
     float energy = vParams.x * level * min(${BASE_WIDTH.toFixed(3)} / max(w, 0.22), 1.0);
-    gl_FragColor = vec4(vColor * energy * spill * (0.06 + 0.1 * E) * mix(0.7, 1.2, haze) * uGain, 1.0);
+    gl_FragColor = vec4(vColor * energy * spill * (0.04 + 0.08 * E) * mix(0.8, 1.1, haze) * uGain, 1.0);
   }
 }`;
 

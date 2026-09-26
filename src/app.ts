@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { AudioEngine } from './audio/engine';
-import { renderWav } from './audio/export';
+import { renderTimelineWav, renderWav } from './audio/export';
+import type { ScheduledNote } from './audio/engine';
+import type { Timeline } from './capture/timeline';
+import { holdSeconds } from './audio/instruments';
 import { ENVELOPES, envelopeAt } from './audio/instruments';
 import { degreeCount, degreeToMidi, lightToDegree, receptorPitch } from './music/pitch';
 import { lightToRGB } from './render/spectral-color';
@@ -18,7 +21,7 @@ import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
 import type { Loom, SceneModel } from './scene/types';
-import { planNotes, type NoteTemplate } from './timing/arrivals';
+import { notesInWindow, planNotes, type NoteTemplate } from './timing/arrivals';
 import { BeatClock } from './timing/clock';
 import { pulseSources, SUBDIVISION_BEATS, type PulseSource } from './timing/sources';
 import { channelPulses, ENV_SLOTS, layoutVisuals, type VisualLayout } from './timing/visual';
@@ -146,7 +149,7 @@ export class App {
       h('span.sl-title-sub', { text: 'an optical instrument' }),
     );
     const hint = h('footer.sl-keys', {
-      html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>space</kbd> play',
+      html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>wheel</kbd>/<kbd>pinch</kbd> zoom <kbd>right-drag</kbd> pan <kbd>space</kbd> play',
     });
     this.overlay = opts.scene ? this.buildOverlay() : this.buildWelcome();
     this.loomEditor = new LoomEditor(this.store, (id) => this.rowsForCard(id));
@@ -158,6 +161,20 @@ export class App {
     this.soundChip = h('button.sl-chip', { type: 'button', hidden: true, text: 'Sound paused by the browser — click to resume' });
     this.soundChip.addEventListener('click', () => void this.engine.resume());
     this.root.append(this.soundChip);
+    const zoomBtn = (text: string, label: string, fn: () => void): HTMLButtonElement => {
+      const b = h('button.sl-zbtn', { type: 'button', text, 'aria-label': label, title: label });
+      b.addEventListener('click', fn);
+      return b;
+    };
+    this.root.append(
+      h(
+        'div.sl-zoom',
+        {},
+        zoomBtn('+', 'Zoom in (+)', () => this.interaction.zoomAt(1.3)),
+        zoomBtn('−', 'Zoom out (−)', () => this.interaction.zoomAt(1 / 1.3)),
+        zoomBtn('⤢', 'Fit table (0)', () => this.interaction.resetView()),
+      ),
+    );
     this.engine.onStatus = (status) => (this.soundChip.hidden = status === 'running');
     this.root.addEventListener('pointerdown', this.onAnyPointer, true);
 
@@ -258,10 +275,12 @@ export class App {
         if (this.tutorial) this.resizeObserver.unobserve(this.tutorial.el);
         this.tutorial = null;
         this.interaction.onClickPlace = null;
+        this.interaction.onGhost = null;
         this.resize();
       },
     });
     this.interaction.onClickPlace = () => this.tutorial?.snapNow();
+    this.interaction.onGhost = () => this.tutorial?.placeFromGhost() ?? null;
     this.root.append(this.tutorial.el);
     this.resizeObserver.observe(this.tutorial.el);
     this.resize();
@@ -329,10 +348,12 @@ export class App {
     const side = this.panels.side.getBoundingClientRect();
     // The tutorial card sits at the bottom: frame the table above it so it never covers glass.
     const coach = this.tutorial?.el.getBoundingClientRect() ?? (this.loomEditor.openId ? this.loomEditor.el.getBoundingClientRect() : undefined);
+    // Hidden panels (film mode, small screens) report empty rects: they take no room.
+    const shown = (b: DOMRect): boolean => b.width > 0 && b.height > 0;
     this.renderer.setInsets({
-      left: Math.max(0, pal.right - r.left - 10),
-      right: Math.max(0, r.right - side.left - 10),
-      top: 60,
+      left: shown(pal) ? Math.max(0, pal.right - r.left - 10) : 0,
+      right: shown(side) ? Math.max(0, r.right - side.left - 10) : 0,
+      top: this.capture ? 0 : 60,
       bottom: coach && coach.height > 0 ? Math.max(24, r.bottom - coach.top + 8) : 24,
     });
   }
@@ -445,9 +466,16 @@ export class App {
 
   private frame = (): void => {
     this.raf = 0;
-    if (!this.visible || document.hidden) return;
-    const wall = performance.now() / 1000;
+    if (this.capture || !this.visible || document.hidden) return;
+    this.renderAt(performance.now() / 1000, null);
+    this.schedule();
+  };
 
+  /**
+   * Draw one frame. `virtual` (capture mode) replaces the audio clock with a scripted time,
+   * so a film can be rendered frame by frame, faster or slower than real time.
+   */
+  private renderAt(wall: number, virtual: BeatClock | null): void {
     if (this.dirty.views) {
       this.renderer.syncScene(this.store.scene);
       this.dirty.views = false;
@@ -458,10 +486,11 @@ export class App {
       this.dirty.crossfade = false;
     }
 
-    const live = this.engine.ready;
+    const live = this.engine.ready && !virtual;
     const heard = live ? this.engine.heardTime() : wall;
-    const beat = this.engine.playing ? this.engine.clock.beatAt(heard) : live ? null : this.previewClock.beatAt(wall);
-    this.updateLight(heard, live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
+    const clock = virtual ?? (live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
+    const beat = clock ? clock.beatAt(heard) : null;
+    this.updateLight(heard, clock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
     this.loomEditor.setBeat(beat);
@@ -473,10 +502,64 @@ export class App {
     this.renderer.gizmo.setHover(hov ?? null, hov ? (this.renderer.views.get(hov.id)?.radius ?? 1) : 1);
 
     this.renderer.render(wall, wall);
-    this.noteLabels.update(this.renderer.camera, this.canvas.clientWidth, this.canvas.clientHeight, this.engine.recentNotes(), heard);
+    this.noteLabels.update(this.renderer.camera, this.canvas.clientWidth, this.canvas.clientHeight, this.visibleNotes(heard), heard);
     this.updateStats(wall);
-    this.schedule();
-  };
+  }
+
+  /** Notes sounding around `time`: from the audio engine, or computed from the plan while filming. */
+  private visibleNotes(time: number): readonly ScheduledNote[] {
+    const clock = this.captureClock;
+    if (!clock) return this.engine.recentNotes();
+    return notesInWindow(this.plan, this.sources, clock.beatAt(time - 6), clock.beatAt(time + 0.05))
+      .filter((n) => n.launchBeat >= 0)
+      .map((n) => ({ ...n, time: clock.timeAt(n.beat), holdS: holdSeconds(n.instrument, n.lenBeats * clock.secondsPerBeat) }));
+  }
+
+  // ------------------------------------------------------------------ capture mode
+
+  private capture: Timeline | null = null;
+  private captureClock: BeatClock | null = null;
+
+  /** Enter film mode: no UI, no real-time loop; frames are rendered on demand. */
+  captureStart(timeline: Timeline): void {
+    this.capture = timeline;
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.tutorial?.close();
+    this.overlay?.remove();
+    this.overlay = null;
+    this.store.select(null);
+    this.root.classList.add('sl-capture');
+    const scene = timeline.at(0);
+    this.captureClock = new BeatClock(scene.settings.bpm);
+    this.captureClock.anchor(0, 0);
+    this.store.load(scene);
+    this.resize();
+  }
+
+  /** Render the film at time t (seconds). */
+  captureFrame(t: number): void {
+    const tl = this.capture;
+    if (!tl || !this.captureClock) return;
+    const next = tl.at(t);
+    const prev = this.store.scene;
+    const toggled = next.elements.some((e) => prev.elements.find((p) => p.id === e.id)?.enabled !== e.enabled);
+    if (JSON.stringify(next.elements) !== JSON.stringify(prev.elements)) {
+      this.store.scene = next;
+      this.dirty.optics = true;
+      this.dirty.views = true;
+      this.dirty.crossfade = toggled;
+    }
+    Object.assign(this.renderer.angles, tl.camera(t));
+    this.renderer.updateCamera();
+    this.renderAt(t, this.captureClock);
+  }
+
+  /** The film's soundtrack, rendered offline against the same timeline. */
+  async captureWav(): Promise<Blob> {
+    if (!this.capture) throw new Error('not in capture mode');
+    return renderTimelineWav(this.capture, this.store.scene.settings.masterDb);
+  }
 
   /**
    * Upload the pulses that can still be visible somewhere on a beam: launched within the
@@ -508,7 +591,7 @@ export class App {
   /** Receptor slits glow with their notes; modulator rings and loom cards follow the beat. */
   private updateInstruments(heard: number, beat: number | null): void {
     const level = new Map<string, number>();
-    for (const n of this.engine.recentNotes()) {
+    for (const n of this.visibleNotes(heard)) {
       const v = envelopeAt(ENVELOPES[n.instrument], n.holdS, heard - n.time) * n.velocity;
       if (v > 0) level.set(n.receptorId, (level.get(n.receptorId) ?? 0) + v);
     }
@@ -544,7 +627,7 @@ export class App {
     if (wall - this.lastMood < 0.5) return;
     this.lastMood = wall;
     const windowS = 6;
-    const notes = this.engine.playing ? this.engine.recentNotes().filter((n) => n.time <= heard && n.time > heard - windowS) : [];
+    const notes = this.engine.playing || this.captureClock ? this.visibleNotes(heard).filter((n) => n.time <= heard && n.time > heard - windowS) : [];
     const w = this.pinnedWeather ?? moodWeather({ scale: this.store.scene.settings.scale, bpm: this.store.scene.settings.bpm, notes, windowS });
     this.renderer.atmosphere.setWeather(w, this.pinnedWeather !== null);
     this.weatherLabel = weatherName(w);

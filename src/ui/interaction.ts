@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BEAM_HEIGHT } from '../render/frame';
-import { CAMERA_LIMITS, type Renderer } from '../render/renderer';
+import { CAMERA_LIMITS, ZOOM_LIMITS, type Renderer } from '../render/renderer';
 import { makeElement } from '../scene/defaults';
 import type { SceneStore } from '../scene/store';
 import type { ElementKind, SceneElement, Vec2 } from '../scene/types';
@@ -13,6 +13,7 @@ type Mode =
   | { kind: 'drag'; id: string; offset: Vec2; moved: boolean; startClient: Vec2 }
   | { kind: 'rotate'; id: string }
   | { kind: 'orbit'; startClient: Vec2; az0: number; pol0: number }
+  | { kind: 'pan'; last: Vec2 }
   | { kind: 'place'; elementId: string | null; elKind: ElementKind; startClient: Vec2; moved: boolean };
 
 function snapAngle(a: number, free: boolean): number {
@@ -62,6 +63,8 @@ export class Interaction {
 
   /** Lets the tutorial move a click-placed element straight to its target. */
   onClickPlace: ((id: string) => void) | null = null;
+  /** Pressing on the tutorial's ghost outline places the real element there. */
+  onGhost: (() => string | null) | null = null;
 
   get hovered(): string | null {
     return this.hoverId;
@@ -83,6 +86,13 @@ export class Interaction {
     this.setNdc(clientX, clientY);
     const hits = this.raycaster.intersectObjects(this.renderer.views.pickTargets(), false);
     return (hits[0]?.object.userData.elementId as string | undefined) ?? null;
+  }
+
+  private pickGhost(clientX: number, clientY: number): boolean {
+    const g = this.renderer.ghostPick;
+    if (!g) return false;
+    this.setNdc(clientX, clientY);
+    return this.raycaster.intersectObject(g, false).length > 0;
   }
 
   private pickKnob(clientX: number, clientY: number): boolean {
@@ -116,7 +126,11 @@ export class Interaction {
       this.canvas.style.cursor = 'grabbing';
       return;
     }
-    const id = e.button === 0 ? this.pickElement(e.clientX, e.clientY) : null;
+    let id = e.button === 0 ? this.pickElement(e.clientX, e.clientY) : null;
+    if (!id && e.button === 0 && this.onGhost && this.pickGhost(e.clientX, e.clientY)) {
+      // The element appears where the ghost was and stays grabbed, so a drag just continues.
+      id = this.onGhost();
+    }
     if (id) {
       const el = this.store.get(id)!;
       const p = this.tablePoint(e.clientX, e.clientY);
@@ -129,6 +143,11 @@ export class Interaction {
         startClient: client,
       };
       this.canvas.style.cursor = 'grabbing';
+      return;
+    }
+    if (e.button === 2 || e.button === 1) {
+      this.mode = { kind: 'pan', last: client };
+      this.canvas.style.cursor = 'move';
       return;
     }
     const { azimuth, polar } = this.renderer.angles;
@@ -159,6 +178,16 @@ export class Interaction {
       if (a !== el.rotation) this.store.updateElement(m.id, (t) => (t.rotation = a));
       return;
     }
+    if (m.kind === 'pan') {
+      const a = this.tablePoint(m.last.x, m.last.y);
+      const b = this.tablePoint(e.clientX, e.clientY);
+      m.last = { x: e.clientX, y: e.clientY };
+      if (!a || !b) return;
+      this.renderer.angles.panX -= b.x - a.x;
+      this.renderer.angles.panZ -= b.y - a.y;
+      this.renderer.updateCamera();
+      return;
+    }
     if (m.kind === 'orbit') {
       const dx = (e.clientX - m.startClient.x) / this.canvas.clientWidth;
       const dy = (e.clientY - m.startClient.y) / this.canvas.clientHeight;
@@ -186,10 +215,40 @@ export class Interaction {
     if (id) this.store.toggle(id);
   }
 
+  /** Zoom by `factor`, keeping the table point under (clientX, clientY) where it is. */
+  zoomAt(factor: number, clientX?: number, clientY?: number): void {
+    const a = this.renderer.angles;
+    const next = Math.min(ZOOM_LIMITS.max, Math.max(ZOOM_LIMITS.min, a.zoom * factor));
+    if (next === a.zoom) return;
+    const r = this.canvas.getBoundingClientRect();
+    const cx = clientX ?? r.left + r.width / 2;
+    const cy = clientY ?? r.top + r.height / 2;
+    const before = this.tablePoint(cx, cy);
+    a.zoom = next;
+    this.renderer.updateCamera();
+    const after = this.tablePoint(cx, cy);
+    if (before && after) {
+      a.panX += before.x - after.x;
+      a.panZ += before.y - after.y;
+      this.renderer.updateCamera();
+    }
+  }
+
+  resetView(): void {
+    Object.assign(this.renderer.angles, { zoom: 1, panX: 0, panZ: 0, azimuth: 0, polar: 0.66 });
+    this.renderer.updateCamera();
+  }
+
   private wheel(e: WheelEvent): void {
-    // Only capture the wheel over an element; otherwise let the host page scroll.
     const id = this.pickElement(e.clientX, e.clientY);
-    if (!id) return;
+    if (!id) {
+      // Zoom with a pinch (ctrl+wheel) always, with a plain wheel once the demo has focus;
+      // before that the wheel scrolls the host page.
+      if (!e.ctrlKey && !this.root.contains(document.activeElement)) return;
+      e.preventDefault();
+      this.zoomAt(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX, e.clientY);
+      return;
+    }
     e.preventDefault();
     const el = this.store.get(id)!;
     const dir = Math.sign(e.deltaY || e.deltaX);
@@ -204,8 +263,14 @@ export class Interaction {
 
   private keyDown(e: KeyboardEvent): void {
     if ((e.target as HTMLElement).closest('input, select, textarea')) return;
-    const el = this.store.selected;
     const key = e.key.toLowerCase();
+    if (key === '+' || key === '=' || key === '-' || key === '0') {
+      if (key === '0') this.resetView();
+      else this.zoomAt(key === '-' ? 1 / 1.25 : 1.25);
+      e.preventDefault();
+      return;
+    }
+    const el = this.store.selected;
     if (!el) return;
     if (key === 'q' || key === 'e') {
       this.rotateBy(el, (key === 'q' ? -1 : 1) * (e.shiftKey ? FINE_STEP : ROT_STEP), e.shiftKey);

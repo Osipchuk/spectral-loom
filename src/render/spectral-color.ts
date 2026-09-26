@@ -86,3 +86,13 @@ export function bandToRGB(minNm: number, maxNm: number): RGB {
 export function lightToRGB(light: RayLight): RGB {
   return light.kind === 'mono' ? wavelengthToRGB(light.nm) : bandToRGB(light.minNm, light.maxNm);
 }
+
+/**
+ * A display-friendly version of a spectral colour: same hue, lifted so the brightest channel
+ * is 1 and mixed a little towards white. Deep violet and deep red are nearly black in
+ * physical terms; UI swatches and labels must stay readable.
+ */
+export function readableRGB(rgb: RGB, whiten = 0.18): RGB {
+  const max = Math.max(rgb[0], rgb[1], rgb[2], 1e-4);
+  return rgb.map((c) => (c / max) * (1 - whiten) + whiten) as RGB;
+}

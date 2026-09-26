@@ -3,6 +3,7 @@ import { ENVELOPES, envelopeAt } from '../audio/instruments';
 import type { ScheduledNote } from '../audio/engine';
 import { NOTE_NAMES } from '../music/scales';
 import type { Vec2 } from '../scene/types';
+import { readableRGB } from '../render/spectral-color';
 import { h } from './dom';
 
 export interface NoteLabel {
@@ -34,7 +35,7 @@ export class NoteLabels {
     this.el.replaceChildren();
     this.items = labels.map((label) => {
       const node = h('span.sl-note', { text: label.text });
-      const [r, g, b] = label.rgb.map((c) => Math.round(Math.min(1, c) * 255));
+      const [r, g, b] = readableRGB(label.rgb, 0.1).map((c) => Math.round(Math.min(1, c) * 255));
       node.style.setProperty('--c', `rgb(${r},${g},${b})`);
       this.el.append(node);
       const p = { x: label.at.x + label.back.x * 1.1, y: label.at.y + label.back.y * 1.1 };

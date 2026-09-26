@@ -518,7 +518,7 @@ export class Diorama {
       const ph = s.userData.phase as number;
       s.position.x += Math.sin(time * 0.05 + ph) * 0.01 + w.wind * 0.02;
       if (s.position.x > 80) s.position.x = -80;
-      (s.material as THREE.SpriteMaterial).opacity = w.mist * 0.1 * (0.6 + 0.4 * Math.sin(time * 0.1 + ph));
+      (s.material as THREE.SpriteMaterial).opacity = w.mist * 0.05 * (0.6 + 0.4 * Math.sin(time * 0.1 + ph));
     }
   }
 

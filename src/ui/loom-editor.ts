@@ -2,6 +2,7 @@ import { BEAT_PRESETS, composeBeat, composeMelody, MELODY_PRESETS } from '../mus
 import type { SceneStore } from '../scene/store';
 import type { Loom, LoomNote, Subdivision } from '../scene/types';
 import { SUBDIVISION_BEATS } from '../timing/sources';
+import { readableRGB } from '../render/spectral-color';
 import { h } from './dom';
 
 /** One playable row of the card: a pitch (or drum) that reaches a receptor through it. */
@@ -23,7 +24,7 @@ const CELL_W = 20;
 const LABEL_W = 64;
 
 const css = (rgb: [number, number, number], a = 1): string =>
-  `rgba(${rgb.map((c) => Math.round(Math.min(1, c) * 255)).join(',')},${a})`;
+  `rgba(${readableRGB(rgb).map((c) => Math.round(Math.min(1, c) * 255)).join(',')},${a})`;
 
 /**
  * Piano-roll editor for a loom card. Click an empty cell to punch a note and drag right to
@@ -224,8 +225,11 @@ export class LoomEditor {
       const y = (rows.length - 1 - i) * ROW_H;
       c.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.045)';
       c.fillRect(LABEL_W, y, loom.steps * CELL_W, ROW_H);
-      c.fillStyle = css(row.rgb, 0.9);
-      c.fillRect(4, y + 5, 7, ROW_H - 10);
+      c.fillStyle = css(row.rgb, 0.95);
+      c.fillRect(4, y + 4, 8, ROW_H - 8);
+      c.strokeStyle = 'rgba(255,255,255,0.5)';
+      c.lineWidth = 1;
+      c.strokeRect(4.5, y + 4.5, 7, ROW_H - 9);
       c.fillStyle = '#c9cedb';
       c.font = '500 10px ui-monospace, "JetBrains Mono", Menlo, monospace';
       c.textBaseline = 'middle';
@@ -248,14 +252,13 @@ export class LoomEditor {
       const y = (rows.length - 1 - i) * ROW_H;
       const x = LABEL_W + n.at * CELL_W;
       const active = this.playStep >= n.at && this.playStep < n.at + n.len;
-      c.fillStyle = css(row.rgb, active ? 1 : 0.78);
+      c.fillStyle = css(row.rgb, active ? 1 : 0.85);
       roundRect(c, x + 2, y + 2, n.len * CELL_W - 4, ROW_H - 4, 4);
       c.fill();
-      if (active) {
-        c.strokeStyle = '#ffffff';
-        c.lineWidth = 1.5;
-        c.stroke();
-      }
+      // Always framed, so even the deepest red and violet notes stand out from the grid.
+      c.strokeStyle = active ? '#ffffff' : 'rgba(255,255,255,0.6)';
+      c.lineWidth = active ? 2 : 1;
+      c.stroke();
     }
   }
 
