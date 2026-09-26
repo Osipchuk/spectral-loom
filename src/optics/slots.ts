@@ -19,6 +19,15 @@ export function defaultSlots(count = DEFAULT_SLOT_COUNT): LoomSlot[] {
   }));
 }
 
+/**
+ * Engine 2: whether a card has been cut. A card is cut the first time it is dropped into
+ * light; until then its rows are pitches, as on an engine-1 card, so a new card plays its
+ * notes straight away and keeps playing them once cut.
+ */
+export function isCut(loom: Pick<Loom, 'slots'>): boolean {
+  return !!loom.slots && loom.slots.length > 0;
+}
+
 export function loomSlots(loom: Pick<Loom, 'slots'>): LoomSlot[] {
   return loom.slots && loom.slots.length > 0 ? loom.slots : defaultSlots();
 }

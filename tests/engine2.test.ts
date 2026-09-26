@@ -101,10 +101,10 @@ describe('engine 2 lets the optics play', () => {
    * notes move by more than a hair are bisected: a slope shrinks with the step, a jump (a
    * note snapping to the other side of a grid line) stays whatever the step.
    */
-  const worstJump = (scene: SceneModel, id: string): number => {
+  const worstJump = (scene: SceneModel, id: string, hair = 0.004): number => {
     const jump = (a: number, b: number, ea: NoteEvent[], eb: NoteEvent[]): number => {
       const dt = compare(ea, eb).maxDt;
-      if (dt < 0.02 || b - a < 0.002) return dt;
+      if (dt < hair || b - a < 0.001) return dt;
       const m = (a + b) / 2;
       const em = turned(scene, id, m);
       return Math.max(jump(a, m, ea, em), jump(m, b, em, eb));
@@ -123,16 +123,15 @@ describe('engine 2 lets the optics play', () => {
     expect(worstJump(DEMO_SCENES.find((d) => d.id === 'canon')!.scene, 'ground-prism')).toBeGreaterThan(0.2);
   });
 
-  // What is left in engine 2 is ray sampling: when a colour's ray crosses into the next
-  // slot, the notes of both slots lose or gain a ray and move by a few hundredths of a beat,
-  // at the same moment the chord itself changes. Far below a grid step (0.25).
-  it('engine 2 glides: turning any element never snaps a note across the grid', () => {
+  // Colours fade between slots and each note keeps its colour's timing, so what is left is
+  // a colour's earliest ray slipping off the edge of a receptor: under 4 ms.
+  it('engine 2 glides: turning any element never makes a note jump in time', () => {
     for (const demo of DEMO_SCENES) {
       const base = toEngine2(demo.scene);
       for (const el of base.elements) {
         if (el.kind !== 'prism' && el.kind !== 'mirror' && el.kind !== 'lens') continue;
         // Pitches may change as colours slide across slots; notes that stay must not jump.
-        expect(worstJump(base, el.id), `${demo.id} ${el.id}`).toBeLessThan(0.05);
+        expect(worstJump(base, el.id), `${demo.id} ${el.id}`).toBeLessThan(0.004);
       }
     }
   });

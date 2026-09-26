@@ -1,9 +1,10 @@
 import { lightToDegree, receptorPitch } from '../music/pitch';
-import { cardU, loomSlots } from '../optics/slots';
+import { cardU, isCut, loomSlots } from '../optics/slots';
 import { trace } from '../optics/tracer';
 import type { RayTree } from '../optics/types';
 import { fromAngle, madd } from '../optics/vec2';
 import { AUDIO_THRESHOLD, planNotes, type NoteTemplate } from '../timing/arrivals';
+import { poseAt } from '../timing/motion';
 import { cloneScene } from './defaults';
 import type { Loom, LoomNote, LoomSlot, Receptor, SceneModel } from './types';
 
@@ -50,8 +51,9 @@ function crossings(scene: SceneModel, tree: RayTree, loom: Loom): Crossing[] {
  * through the slot of its own pitch.
  */
 export function cutSlots(scene: SceneModel, tree: RayTree, loom: Loom): { slots: LoomSlot[]; degrees: number[] } {
+  const all = crossings(scene, tree, loom);
   const byDeg = new Map<number, number[]>();
-  for (const c of crossings(scene, tree, loom)) {
+  for (const c of all) {
     const list = byDeg.get(c.degree) ?? [];
     list.push(c.u);
     byDeg.set(c.degree, list);
@@ -67,13 +69,40 @@ export function cutSlots(scene: SceneModel, tree: RayTree, loom: Loom): { slots:
     // Rays of neighbouring pitches normally do not interleave; if they do, split at the means.
     edges.push(a.hi <= b.lo ? (a.hi + b.lo) / 2 : (a.mid + b.mid) / 2);
   }
-  const gaps = edges.map((e, i) => e - spans[i]!.hi);
-  const margin = gaps.length > 0 ? Math.max(0.01, gaps.reduce((a, b) => a + b, 0) / gaps.length) : 0.04;
+  // The outer slots reach as far as the outermost rays' own strips (half a typical gap),
+  // so at this geometry every ray passes whole through the slot of its pitch.
+  const us = all.map((c) => c.u).sort((a, b) => a - b);
+  const gaps = us.slice(1).map((x, i) => x - us[i]!).sort((a, b) => a - b);
+  const margin = gaps.length > 0 ? Math.max(0.005, gaps[Math.floor(gaps.length / 2)]! / 2) : 0.04;
   const slots = spans.map((s, i) => ({
     u0: Math.max(-0.5, i === 0 ? s.lo - margin : edges[i - 1]!),
     u1: Math.min(0.5, i === spans.length - 1 ? s.hi + margin : edges[i]!),
   }));
   return { slots, degrees: spans.map((s) => s.degree) };
+}
+
+/**
+ * Engine 2: cut every card that is not cut yet and that light reaches, keeping the notes it
+ * plays (its rows are still pitches until then), with the glass posed as at `beat`.
+ * Mutates the scene; returns the ids of the cards it cut.
+ */
+export function cutNewCards(scene: SceneModel, beat = 0): string[] {
+  if (scene.settings.engine !== 2) return [];
+  const fresh = scene.elements.filter((e): e is Loom => e.kind === 'loom' && e.enabled && !isCut(e));
+  if (fresh.length === 0) return [];
+  const posed = poseAt(scene, beat);
+  const tree = trace(posed);
+  const cut: string[] = [];
+  for (const loom of fresh) {
+    const asPosed = posed.elements.find((e): e is Loom => e.id === loom.id && e.kind === 'loom')!;
+    const probe: Loom = { ...asPosed, notes: loom.notes };
+    bakeLoom(posed, tree, probe);
+    if (!isCut(probe)) continue;
+    loom.slots = probe.slots;
+    loom.notes = probe.notes;
+    cut.push(loom.id);
+  }
+  return cut;
 }
 
 /** Rewrite notes through a row map, dropping the ones with no row and exact duplicates. */

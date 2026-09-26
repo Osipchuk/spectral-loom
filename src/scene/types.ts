@@ -17,11 +17,18 @@ export type ScaleName = 'majorPent' | 'minorPent' | 'dorian' | 'major' | 'minor'
 
 export type SpectrumSpec = { kind: 'white' } | { kind: 'band'; minNm: number; maxNm: number };
 
+/**
+ * Clockwork: an element that turns by itself as the music plays, on the beat clock.
+ * `turn` keeps rotating; `swing` rocks to and fro around its set angle.
+ */
+export type Motion = { kind: 'turn'; degPerBar: number } | { kind: 'swing'; degrees: number; bars: number };
+
 interface BaseElement {
   id: NodeId;
   pos: Vec2;
   rotation: number;
   enabled: boolean;
+  motion?: Motion;
 }
 
 export interface Emitter extends BaseElement {

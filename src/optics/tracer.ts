@@ -8,7 +8,7 @@ import {
   type Collider,
   type SegmentCollider,
 } from './geometry';
-import { cardU, loomSlots, slotAt } from './slots';
+import { cardU, isCut, loomSlots, slotAt } from './slots';
 import { centroidNm, combPeaks, combTransmission, filterLight, pitchPosition, sampleBand, WHITE, type RayLight } from './spectrum';
 import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit, type TraceOptions } from './types';
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
@@ -36,6 +36,7 @@ interface RayState {
   ignoreId: string | null;
   thin: boolean;
   slot: number | null;
+  cardU: number | null;
 }
 
 /** Max-heap on intensity so the segment budget is spent on the brightest rays first. */
@@ -127,6 +128,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       ignoreId: null,
       thin: false,
       slot: null,
+      cardU: null,
     });
   }
 
@@ -185,6 +187,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       bounces: ray.bounces,
       thin: ray.thin,
       slot: ray.slot,
+      cardU: ray.cardU,
       depth: ray.depth,
       audible: fanPower >= opts.audioThreshold,
     };
@@ -245,6 +248,8 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
             pos: end,
             fan: ray.group ? ray.group.count : 1,
             slot: ray.slot,
+            cardU: ray.cardU,
+            fanId: ray.group ? ray.group.id : -1,
           });
         } else {
           seg.endEvent = { kind: 'absorbed', elementId: c.elementId };
@@ -383,11 +388,13 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       case 'loom':
       case 'chord': {
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: c.role };
-        // Engine 2: a card remembers which of its slots the light went through.
+        // Engine 2: a cut card remembers where the light crossed it and through which slot.
+        // A card not cut yet (no slots) still holds pitches, like an engine-1 card.
         const el = byId.get(c.elementId);
-        const slot = engine2 && el?.kind === 'loom' ? slotAt(loomSlots(el), cardU(el, end)) : null;
+        const u = engine2 && el?.kind === 'loom' && isCut(el) ? cardU(el, end) : null;
+        const slot = u !== null && el?.kind === 'loom' ? slotAt(loomSlots(el), u) : null;
         child(
-          { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId, slot },
+          { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId, slot, cardU: u },
           'm',
         );
         break;

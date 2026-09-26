@@ -1,5 +1,5 @@
 import * as Tone from 'tone';
-import type { NoteTemplate } from '../timing/arrivals';
+import type { NoteTemplate, PlanByLaunch } from '../timing/arrivals';
 import type { PulseSource } from '../timing/sources';
 import { trace } from '../optics/tracer';
 import { planNotes } from '../timing/arrivals';
@@ -38,12 +38,13 @@ export async function renderWav(
   bpm: number,
   masterDb: number,
   seconds: number,
+  moving: PlanByLaunch | null = null,
 ): Promise<Blob> {
   const tail = 4;
   const buffer = await Tone.Offline(async () => {
     const engine = new AudioEngine(bpm);
     await engine.buildGraph(masterDb);
-    engine.setPlan(templates, sources);
+    engine.setPlan(templates, sources, moving);
     engine.clock.anchor(0.05, 0);
     engine.scheduleBeats(0, engine.clock.beatAt(seconds), 0, 0);
   }, seconds + tail, 2);

@@ -66,8 +66,8 @@ export function pulseSources(scene: SceneModel): Map<string, PulseSource> {
         g.degs.push(n.deg);
         byStart.set(n.at, g);
       }
-      // Engine 2: card rows are slots, not pitches.
-      const slotted = scene.settings.engine === 2;
+      // Engine 2: rows of a cut card are slots, not pitches.
+      const slotted = scene.settings.engine === 2 && !!el.slots && el.slots.length > 0;
       const events = [...byStart.entries()]
         .sort((a, b) => a[0] - b[0])
         .map(([at, g]) =>

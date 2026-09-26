@@ -1,7 +1,7 @@
 import * as Tone from 'tone';
 import { midiToFrequency } from '../music/pitch';
 import type { Instrument } from '../scene/types';
-import { notesInWindow, type NoteEvent, type NoteTemplate } from '../timing/arrivals';
+import { notesInWindow, type NoteEvent, type NoteTemplate, type PlanByLaunch } from '../timing/arrivals';
 import { BeatClock } from '../timing/clock';
 import type { PulseSource } from '../timing/sources';
 import { DRUM_BASE_MIDI, DrumKit } from './drums';
@@ -73,6 +73,8 @@ export class AudioEngine {
   private interval: number | null = null;
   private scheduledUntil = 0;
   private templates: NoteTemplate[] = [];
+  /** Moving optics: templates by pulse launch (null when nothing moves). */
+  private moving: PlanByLaunch | null = null;
   private sources = new Map<string, PulseSource>();
   private recent: ScheduledNote[] = [];
   playing = false;
@@ -141,8 +143,9 @@ export class AudioEngine {
     this.nodes.push(limiter, comp, reverb, delay, dry, master);
   }
 
-  setPlan(templates: NoteTemplate[], sources: Map<string, PulseSource>): void {
+  setPlan(templates: NoteTemplate[], sources: Map<string, PulseSource>, moving: PlanByLaunch | null = null): void {
     this.templates = templates;
+    this.moving = moving;
     this.sources = sources;
     // Retire voices of receptors that no longer receive light (let their tails ring out).
     const live = new Set(templates.map((t) => `${t.receptorId}|${t.instrument}`));
@@ -237,7 +240,7 @@ export class AudioEngine {
    */
   scheduleBeats(fromBeat: number, toBeat: number, now: number, firstLaunch = -Infinity): void {
     if (!this.buses) return;
-    const events = notesInWindow(this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
+    const events = notesInWindow(this.moving ?? this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
     this.scheduledUntil = toBeat;
     // A receptor has one tone filter and one panner: notes struck together share them, set
     // to their loudness-weighted average rather than to whichever note came last.

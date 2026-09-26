@@ -1,6 +1,7 @@
 import { degreeToMidi, lightToDegree, receptorPitch } from '../music/pitch';
-import type { RayTree } from '../optics/types';
-import type { Instrument, Receptor, SceneModel } from '../scene/types';
+import { loomSlots } from '../optics/slots';
+import type { RayTree, ReceptorHit } from '../optics/types';
+import type { Instrument, Loom, Receptor, SceneModel } from '../scene/types';
 import { pulsesInRange, type Pulse, type PulseSource } from './sources';
 
 /** Width that counts as "normal" beam width for velocity; narrower (focused) is louder. */
@@ -182,69 +183,134 @@ function planNotesV1(scene: SceneModel, tree: RayTree): NoteTemplate[] {
 }
 
 /**
+ * Engine-2 cards: how much of each ray goes through each slot. A dispersed fan is sampled
+ * by a few dozen rays; each ray stands for the strip of the card up to halfway to its
+ * neighbours in the fan, and a slot passes the part of that strip it overlaps. As glass
+ * moves, a colour slides from one slot into the next gradually: its note fades out of one
+ * row and into the other instead of jumping.
+ */
+export function slotCoverage(scene: SceneModel, hits: readonly ReceptorHit[]): Map<ReceptorHit, { slot: number; w: number }[]> {
+  const out = new Map<ReceptorHit, { slot: number; w: number }[]>();
+  const fans = new Map<string, ReceptorHit[]>();
+  for (const h of hits) {
+    if (h.slot === null || h.cardU === null) continue;
+    const key = `${h.pulseSourceId}|${h.receptorId}|${h.bounces}|${h.fanId < 0 ? `s${h.segmentId}` : h.fanId}`;
+    fans.set(key, [...(fans.get(key) ?? []), h]);
+  }
+  for (const fan of fans.values()) {
+    const loom = scene.elements.find((e): e is Loom => e.id === fan[0]!.pulseSourceId && e.kind === 'loom');
+    if (!loom) continue;
+    const slots = loomSlots(loom);
+    fan.sort((x, y) => x.cardU! - y.cardU!);
+    const u = fan.map((h) => h.cardU!);
+    const gaps = u.slice(1).map((x, i) => x - u[i]!);
+    // A lone ray covers its own beam width; missing neighbours (light that fell outside
+    // the receptor) do not stretch a strip beyond one and a half typical gaps.
+    const typical = gaps.length > 0 ? [...gaps].sort((x, y) => x - y)[Math.floor(gaps.length / 2)]! : fan[0]!.width / loom.length;
+    const half = (g: number | undefined): number => Math.min(g ?? typical, 1.5 * typical) / 2;
+    fan.forEach((h, i) => {
+      const lo = u[i]! - half(gaps[i - 1]);
+      const hi = u[i]! + half(gaps[i]);
+      const span = Math.max(1e-9, hi - lo);
+      const cover: { slot: number; w: number }[] = [];
+      slots.forEach((sl, k) => {
+        const w = (Math.min(hi, sl.u1) - Math.max(lo, sl.u0)) / span;
+        if (w > 1e-6) cover.push({ slot: k, w });
+      });
+      out.set(h, cover);
+    });
+  }
+  return out;
+}
+
+/**
  * Engine 2. Same grouping as engine 1, but every (slot, pitch) pair is its own note with its
  * own loudness, tone and stereo position, all read from where its light lands: gathered
  * light is louder and brighter, and a receptor turned across the table spreads its notes
- * from left to right. Onsets are pulled to the grid softly (see softQuantizeShift).
+ * from left to right. Onsets are pulled to the grid softly (see softQuantizeShift), and a
+ * note's timing and loudness follow the share of its colour a slot lets through, so moving
+ * glass changes the music continuously.
  */
 function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
   const receptors = new Map<string, Receptor>();
   for (const el of scene.elements) if (el.kind === 'receptor' && el.enabled) receptors.set(el.id, el);
   const { c, quantize } = scene.settings;
+  const heard = tree.receptorHits.filter((h) => receptors.has(h.receptorId) && h.intensity >= AUDIO_THRESHOLD);
+  const coverage = slotCoverage(scene, heard);
 
-  type Acc = { degree: number; slot: number | null; power: number; own: number; rays: number; first: number; uMin: number; uMax: number; widthSum: number; xSum: number };
-  type Group = { receptor: Receptor; sourceId: string; echo: number; notes: Map<string, Acc> };
+  type Acc = { degree: number; slot: number | null; w: number; power: number; own: number; u: number; uu: number; width: number; x: number };
+  type Group = {
+    receptor: Receptor;
+    sourceId: string;
+    echo: number;
+    first: number;
+    notes: Map<string, Acc>;
+    raysPerDegree: Map<number, number>;
+    /** Earliest arrival of each colour, whichever slot it goes through. */
+    degreeFirst: Map<number, number>;
+  };
   const groups = new Map<string, Group>();
 
-  for (const hit of tree.receptorHits) {
-    const r = receptors.get(hit.receptorId);
-    if (!r || hit.intensity < AUDIO_THRESHOLD) continue;
+  for (const hit of heard) {
+    const r = receptors.get(hit.receptorId)!;
     const key = `${r.id}|${hit.pulseSourceId}|${hit.bounces}`;
     let g = groups.get(key);
     if (!g) {
-      g = { receptor: r, sourceId: hit.pulseSourceId, echo: hit.bounces, notes: new Map() };
+      g = { receptor: r, sourceId: hit.pulseSourceId, echo: hit.bounces, first: Infinity, notes: new Map(), raysPerDegree: new Map(), degreeFirst: new Map() };
       groups.set(key, g);
     }
     const degree = lightToDegree(hit.light, receptorPitch(scene.settings, r));
-    const nk = `${hit.slot ?? ''}|${degree}`;
-    let a = g.notes.get(nk);
-    if (!a) {
-      a = { degree, slot: hit.slot, power: 0, own: 0, rays: 0, first: Infinity, uMin: Infinity, uMax: -Infinity, widthSum: 0, xSum: 0 };
-      g.notes.set(nk, a);
-    }
+    const t = travelBeats(hit.s - hit.pulseOriginS, c);
+    g.first = Math.min(g.first, t);
+    g.raysPerDegree.set(degree, (g.raysPerDegree.get(degree) ?? 0) + 1);
+    g.degreeFirst.set(degree, Math.min(g.degreeFirst.get(degree) ?? Infinity, t));
     const u = hit.u * r.aperture;
-    a.power += hit.intensity;
-    a.own += hit.intensity / hit.fan;
-    a.rays += 1;
-    a.first = Math.min(a.first, travelBeats(hit.s - hit.pulseOriginS, c));
-    a.uMin = Math.min(a.uMin, u);
-    a.uMax = Math.max(a.uMax, u);
-    a.widthSum += Math.max(hit.width, 0.05);
-    a.xSum += hit.pos.x;
+    for (const { slot, w } of coverage.get(hit) ?? [{ slot: hit.slot, w: 1 }]) {
+      const nk = `${slot ?? ''}|${degree}`;
+      let a = g.notes.get(nk);
+      if (!a) {
+        a = { degree, slot, w: 0, power: 0, own: 0, u: 0, uu: 0, width: 0, x: 0 };
+        g.notes.set(nk, a);
+      }
+      a.w += w;
+      a.power += w * hit.intensity;
+      a.own += (w * hit.intensity) / hit.fan;
+      a.u += w * u;
+      a.uu += w * u * u;
+      a.width += w * Math.max(hit.width, 0.05);
+      a.x += w * hit.pos.x;
+    }
   }
 
   const out: NoteTemplate[] = [];
   for (const g of groups.values()) {
     const r = g.receptor;
-    const notes = [...g.notes.values()];
-    if (notes.length === 0) continue;
-    const first = Math.min(...notes.map((a) => a.first));
-    const shift = softQuantizeShift(first, quantize);
+    // The group's earliest light sets the grid pull, whichever slots are open.
+    const shift = softQuantizeShift(g.first, quantize);
     const basePan = receptorPan(scene, r);
     const pc = receptorPitch(scene.settings, r);
-    for (const a of notes) {
-      const p = Math.min(1, a.power / a.rays);
-      const brightness = noteBrightness(a.own, a.uMax - a.uMin + a.widthSum / a.rays);
-      const velocity = Math.min(1, (0.18 + 0.38 * p + 0.5 * brightness) * r.gain);
-      const across = (a.xSum / a.rays - r.pos.x) / Math.max(0.5, r.aperture / 2);
+    for (const a of g.notes.values()) {
+      // Share of this colour's light that comes through this slot, times its transmission.
+      const p = Math.min(1, a.power / (g.raysPerDegree.get(a.degree) ?? 1));
+      if (p < 0.03) continue;
+      const mean = a.u / a.w;
+      const spread = 2 * Math.sqrt(Math.max(0, a.uu / a.w - mean * mean));
+      const brightness = noteBrightness(a.own, spread + a.width / a.w);
+      // A colour only partly inside a slot fades out rather than cutting off.
+      const fade = Math.min(1, p / 0.3);
+      const velocity = Math.min(1, (0.18 + 0.38 * p + 0.5 * brightness) * r.gain * fade);
+      const across = (a.x / a.w - r.pos.x) / Math.max(0.5, r.aperture / 2);
+      // A colour arrives when its earliest ray does, through whichever slot: the set of rays
+      // of one colour never changes as glass moves, so neither does this jump.
+      const travel = g.degreeFirst.get(a.degree)!;
       out.push({
         receptorId: r.id,
         sourceId: g.sourceId,
         degree: a.degree,
         midi: degreeToMidi(a.degree, pc),
         velocity,
-        offsetBeats: a.first + shift,
-        travelBeats: a.first,
+        offsetBeats: travel + shift,
+        travelBeats: travel,
         echo: g.echo,
         instrument: r.instrument,
         voices: r.voices,
@@ -263,58 +329,93 @@ export function pulsePasses(p: Pick<Pulse, 'degrees' | 'slots'>, t: Pick<NoteTem
   return !p.degrees || p.degrees.includes(t.degree);
 }
 
+/** Note templates that change with the launch time of a pulse (moving optics, see timing/motion). */
+export interface PlanByLaunch {
+  at(launchBeat: number): NoteTemplate[];
+  /** No note lands later than this after its launch. */
+  readonly maxOffset: number;
+}
+
+function groupTemplates(templates: NoteTemplate[], sourceId?: string): NoteTemplate[][] {
+  const groups = new Map<string, NoteTemplate[]>();
+  for (const t of templates) {
+    if (sourceId !== undefined && t.sourceId !== sourceId) continue;
+    const key = `${t.sourceId}|${t.receptorId}|${t.echo}`;
+    const list = groups.get(key) ?? [];
+    list.push(t);
+    groups.set(key, list);
+  }
+  return [...groups.values()];
+}
+
+/** The notes one pulse sounds through one receptor (one source, one echo), onsets in the window. */
+function pulseNotes(pulse: Pulse, list: NoteTemplate[], fromBeat: number, toBeat: number, out: NoteEvent[]): void {
+  // An open slot plays the strongest colour falling through it: a slot straddling two
+  // colours sounds one note (it flips where both are equally bright), not a clash of seconds.
+  const bySlot = new Map<number, NoteTemplate>();
+  const passing: NoteTemplate[] = [];
+  for (const t of list) {
+    if (!pulsePasses(pulse, t)) continue;
+    if (t.slot === null) {
+      passing.push(t);
+      continue;
+    }
+    const prev = bySlot.get(t.slot);
+    if (!prev || t.velocity > prev.velocity) bySlot.set(t.slot, t);
+  }
+  passing.push(...bySlot.values());
+  // One pitch sounds once per pulse, even if its light came through two open slots.
+  const byMidi = new Map<number, NoteTemplate>();
+  for (const t of passing) {
+    const prev = byMidi.get(t.midi);
+    if (!prev || t.velocity > prev.velocity) byMidi.set(t.midi, t);
+  }
+  const chosen = [...byMidi.values()].sort((a, b) => b.velocity - a.velocity).slice(0, list[0]!.voices);
+  for (const t of chosen) {
+    const beat = pulse.beat + t.offsetBeats;
+    if (beat < fromBeat || beat >= toBeat) continue;
+    out.push({
+      beat,
+      midi: t.midi,
+      velocity: t.velocity,
+      lenBeats: pulse.lenBeats,
+      instrument: t.instrument,
+      receptorId: t.receptorId,
+      sourceId: t.sourceId,
+      launchBeat: pulse.beat,
+      brightness: t.brightness,
+      pan: t.pan,
+    });
+  }
+}
+
 /**
  * All notes whose onset falls in [fromBeat, toBeat). A note belongs to the pulse launched
  * `offsetBeats` earlier, so we look up launches in the shifted window. Pulses carrying a
  * degree set (loom cards) only sound matching templates. Polyphony is capped per receptor
- * and pulse, strongest first.
+ * and pulse, strongest first. With moving optics the templates depend on each pulse's launch.
  */
 export function notesInWindow(
-  templates: NoteTemplate[],
+  plan: NoteTemplate[] | PlanByLaunch,
   sources: Map<string, PulseSource>,
   fromBeat: number,
   toBeat: number,
 ): NoteEvent[] {
-  const bySourceReceptor = new Map<string, NoteTemplate[]>();
-  for (const t of templates) {
-    const key = `${t.sourceId}|${t.receptorId}|${t.echo}`;
-    const list = bySourceReceptor.get(key) ?? [];
-    list.push(t);
-    bySourceReceptor.set(key, list);
-  }
-
   const out: NoteEvent[] = [];
-  for (const list of bySourceReceptor.values()) {
+  if (!Array.isArray(plan)) {
+    for (const src of sources.values()) {
+      for (const pulse of pulsesInRange(src, fromBeat - plan.maxOffset, toBeat)) {
+        for (const list of groupTemplates(plan.at(pulse.beat), src.id)) pulseNotes(pulse, list, fromBeat, toBeat, out);
+      }
+    }
+    return out.sort((a, b) => a.beat - b.beat);
+  }
+  for (const list of groupTemplates(plan)) {
     const src = sources.get(list[0]!.sourceId);
     if (!src) continue;
     const minOff = Math.min(...list.map((t) => t.offsetBeats));
     const maxOff = Math.max(...list.map((t) => t.offsetBeats));
-    for (const pulse of pulsesInRange(src, fromBeat - maxOff - 1e-9, toBeat - minOff)) {
-      // One pitch sounds once per pulse, even if its light came through two open slots.
-      const byMidi = new Map<number, NoteTemplate>();
-      for (const t of list) {
-        if (!pulsePasses(pulse, t)) continue;
-        const prev = byMidi.get(t.midi);
-        if (!prev || t.velocity > prev.velocity) byMidi.set(t.midi, t);
-      }
-      const chosen = [...byMidi.values()].sort((a, b) => b.velocity - a.velocity).slice(0, list[0]!.voices);
-      for (const t of chosen) {
-        const beat = pulse.beat + t.offsetBeats;
-        if (beat < fromBeat || beat >= toBeat) continue;
-        out.push({
-          beat,
-          midi: t.midi,
-          velocity: t.velocity,
-          lenBeats: pulse.lenBeats,
-          instrument: t.instrument,
-          receptorId: t.receptorId,
-          sourceId: t.sourceId,
-          launchBeat: pulse.beat,
-          brightness: t.brightness,
-          pan: t.pan,
-        });
-      }
-    }
+    for (const pulse of pulsesInRange(src, fromBeat - maxOff - 1e-9, toBeat - minOff)) pulseNotes(pulse, list, fromBeat, toBeat, out);
   }
   return out.sort((a, b) => a.beat - b.beat);
 }

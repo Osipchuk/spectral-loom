@@ -22,8 +22,9 @@ import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
 import type { ChordGlass, EngineVersion, Loom, SceneModel } from './scene/types';
-import { recutLoom, toEngine1, toEngine2 } from './scene/engine2';
-import { loomSlots } from './optics/slots';
+import { cutNewCards, recutLoom, toEngine1, toEngine2 } from './scene/engine2';
+import { hasMotion, MovingPlan, poseAt } from './timing/motion';
+import { isCut, loomSlots } from './optics/slots';
 import { notesInWindow, planNotes, type NoteTemplate } from './timing/arrivals';
 import { BeatClock } from './timing/clock';
 import { pulseSources, SUBDIVISION_BEATS, type PulseSource } from './timing/sources';
@@ -47,10 +48,10 @@ export interface AppOptions {
   engine?: EngineVersion;
 }
 
-/** The empty table the welcome screen and tutorial start from. */
-export function starterScene(): SceneModel {
+/** The empty table the welcome screen and tutorial start from. The tutorial teaches engine 2. */
+export function starterScene(engine: EngineVersion = 1): SceneModel {
   const s = emptyScene('Empty table');
-  s.settings = { ...s.settings, bpm: 100, scale: 'majorPent', root: 0 };
+  s.settings = { ...s.settings, engine, bpm: 100, scale: 'majorPent', root: 0 };
   return s;
 }
 
@@ -70,6 +71,12 @@ export class App {
   private canvas: HTMLCanvasElement;
   private tree: RayTree | null = null;
   private plan: NoteTemplate[] = [];
+  /** Moving optics: note templates by pulse launch; null when nothing moves. */
+  private moving: MovingPlan | null = null;
+  /** Beat the light on screen was last posed for, and when (wall clock). */
+  private posedBeat = 0;
+  private lastPose = 0;
+  private lastEditorRefresh = 0;
   private sources = new Map<string, PulseSource>();
   /** Per loom card: where each pitch's ray crosses it (−0.5…0.5 along the card); engine 2: slot centres. */
   private cardLayout = new Map<string, Map<number, number>>();
@@ -111,7 +118,7 @@ export class App {
   };
 
   constructor(host: HTMLElement, opts: AppOptions) {
-    const scene = opts.scene ?? starterScene();
+    const scene = opts.scene ?? starterScene(opts.engine);
     this.store = new SceneStore(scene);
     this.demoId = opts.demoId ?? null;
     this.enginePref = opts.engine ?? scene.settings.engine;
@@ -292,7 +299,7 @@ export class App {
     this.engine.pause();
     this.transport.setPlaying(false);
     this.tutorial?.close();
-    this.loadScene(starterScene());
+    this.loadScene(starterScene(this.enginePref));
     this.overlay?.remove();
     this.overlay = this.buildWelcome();
     this.root.append(this.overlay);
@@ -307,7 +314,7 @@ export class App {
   }
 
   private startTutorial(): void {
-    this.loadScene(starterScene());
+    this.loadScene(starterScene(2));
     this.dismissOverlay();
     // Build the audio graph now, inside this click, so later steps can start sound.
     void this.engine.start(this.store.scene.settings.masterDb);
@@ -319,6 +326,7 @@ export class App {
         if (!this.engine.playing) void this.start();
       },
       relayout: () => this.resize(),
+      settle: () => this.cutCards(),
       openDemo: (id) => {
         this.tutorial?.close();
         this.loadDemo(id);
@@ -374,6 +382,8 @@ export class App {
       this.dirty.views = true;
     }
     if (kinds.has('toggle')) this.dirty.crossfade = true;
+    // Engine 2: a card dropped into light is cut there, keeping the notes it plays.
+    if (kinds.has('drop')) this.cutCards();
     if (kinds.has('load')) this.transport.setEngine(this.store.scene.settings.engine);
     if (kinds.has('settings') || kinds.has('load')) {
       const s = this.store.scene.settings;
@@ -425,13 +435,29 @@ export class App {
   /** Retrace and re-plan. Cheap enough to run on every drag frame. */
   private rebuild(now: number): void {
     const scene = this.store.scene;
-    this.tree = trace(scene);
-    this.plan = planNotes(scene, this.tree);
+    const tree = trace(scene);
+    this.plan = planNotes(scene, tree);
     this.sources = pulseSources(scene);
-    this.engine.setPlan(this.plan, this.sources);
+    this.moving = hasMotion(scene) ? new MovingPlan(scene) : null;
+    this.engine.setPlan(this.plan, this.sources, this.moving);
+    if (this.moving) this.drawLight(now, poseAt(scene, this.posedBeat), true);
+    else this.drawLight(now, scene, true, tree);
+  }
+
+  /**
+   * Trace the light for the table as it stands now (moving optics turn it every frame) and
+   * hand it to the renderer. `edited`: the table itself changed (not just its pose).
+   */
+  private drawLight(now: number, scene: SceneModel, edited: boolean, known?: RayTree): void {
+    this.tree = known ?? trace(scene);
+    const plan = scene === this.store.scene ? this.plan : planNotes(scene, this.tree);
     this.cardLayout = this.computeCardLayout(this.tree);
-    if (this.loomEditor.openId) this.loomEditor.refresh();
-    this.visual = layoutVisuals(scene, this.tree, this.plan, scene.settings.bpm);
+    // Moving light relabels the card editor's rows; a few times a second is plenty.
+    if (this.loomEditor.openId && (edited || now - this.lastEditorRefresh > 0.25)) {
+      this.loomEditor.refresh();
+      this.lastEditorRefresh = now;
+    }
+    this.visual = layoutVisuals(scene, this.tree, plan, scene.settings.bpm);
     if (this.pulseTexture.ensureRows(this.visual.channels.length)) {
       this.renderer.beams.shared.uPulses!.value = this.pulseTexture.texture;
     }
@@ -441,8 +467,17 @@ export class App {
       const w = this.visual.segments.get(g.id)?.warp ?? 0;
       this.maxDelayS = Math.max(this.maxDelayS, (g.sStart + g.length - g.pulseOriginS) / cs + Math.max(0, w));
     }
-    this.renderer.setTree(this.tree, now, this.dirty.crossfade, this.visual);
+    this.renderer.setTree(this.tree, now, edited && this.dirty.crossfade, this.visual);
+    if (scene !== this.store.scene) this.renderer.syncScene(scene);
     this.noteLabels.set(this.computeNoteLabels(this.tree), (p, y) => this.renderer.frame.toWorld(p, y));
+  }
+
+  /** Moving optics: re-pose the table for the beat being heard (at most 30 times a second). */
+  private followMotion(wall: number, beat: number | null): void {
+    if (!this.moving || beat === null || Math.abs(beat - this.posedBeat) < 1e-4 || wall - this.lastPose < 1 / 30) return;
+    this.lastPose = wall;
+    this.posedBeat = beat;
+    this.drawLight(wall, poseAt(this.store.scene, beat), false);
   }
 
   /** One label per pitch per receptor, where that colour's light lands on the slit. */
@@ -514,7 +549,7 @@ export class App {
       heard.set(hit.pulseSourceId, bySlot);
     }
     for (const loom of scene.elements) {
-      if (loom.kind !== 'loom') continue;
+      if (loom.kind !== 'loom' || !isCut(loom)) continue;
       const slots = loomSlots(loom);
       out.set(loom.id, new Map(slots.map((sl, i) => [i, (sl.u0 + sl.u1) / 2])));
       this.cardSlotWidth.set(loom.id, new Map(slots.map((sl, i) => [i, sl.u1 - sl.u0])));
@@ -529,7 +564,9 @@ export class App {
           const midi = degreeToMidi(d, h.pc);
           return h.pc.kit ? (DRUM_PIECES[midi - DRUM_BASE_MIDI] ?? '') : midiName(midi);
         };
-        const label = degs.slice(0, 2).map(([d]) => name(d)).sort().join('+');
+        // The slot plays its strongest colour; a second one it is sliding towards shows in brackets.
+        const second = degs[1] && degs[1][1] >= degs[0]![1] * 0.5 ? ` (${name(degs[1][0])})` : '';
+        const label = name(degs[0]![0]) + second;
         return { deg: i, pitch: degs[0]![0], label, rgb: [h.rgb[0] / h.n, h.rgb[1] / h.n, h.rgb[2] / h.n] as [number, number, number] };
       });
       // The editor draws the last row on top: keep higher notes above lower ones.
@@ -541,12 +578,15 @@ export class App {
   }
 
   private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
-    if (this.store.scene.settings.engine === 2) return this.computeSlotLayout(tree);
-    const out = new Map<string, Map<number, number>>();
-    this.cardRows = new Map();
-    this.cardSlotWidth = new Map();
     const scene = this.store.scene;
-    const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom').map((l) => [l.id, l]));
+    const slotted = scene.settings.engine === 2;
+    // Engine 2: cut cards have slots; a card not cut yet still has pitch rows, as in engine 1.
+    const out = slotted ? this.computeSlotLayout(tree) : new Map<string, Map<number, number>>();
+    if (!slotted) {
+      this.cardRows = new Map();
+      this.cardSlotWidth = new Map();
+    }
+    const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom' && !(slotted && isCut(e))).map((l) => [l.id, l]));
     for (const hit of tree.receptorHits) {
       const loom = looms.get(hit.pulseSourceId);
       const receptor = this.store.get(hit.receptorId);
@@ -612,6 +652,7 @@ export class App {
     const heard = live ? this.engine.heardTime() : wall;
     const clock = virtual ?? (live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
     const beat = clock ? clock.beatAt(heard) : null;
+    this.followMotion(wall, beat);
     this.updateLight(heard, clock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
@@ -641,7 +682,7 @@ export class App {
   private visibleNotes(time: number): readonly ScheduledNote[] {
     const clock = this.captureClock;
     if (!clock) return this.engine.recentNotes();
-    return notesInWindow(this.plan, this.sources, clock.beatAt(time - 6), clock.beatAt(time + 0.05))
+    return notesInWindow(this.moving ?? this.plan, this.sources, clock.beatAt(time - 6), clock.beatAt(time + 0.05))
       .filter((n) => n.launchBeat >= 0)
       .map((n) => ({ ...n, time: clock.timeAt(n.beat), holdS: holdSeconds(n.instrument, n.lenBeats * clock.secondsPerBeat) }));
   }
@@ -803,6 +844,16 @@ export class App {
     if (selected) this.store.select(selected);
   }
 
+  /** Engine 2: cut the cards that light reaches for the first time (see cutNewCards). */
+  private cutCards(): void {
+    if (cutNewCards(this.store.scene, this.posedBeat).length === 0) return;
+    this.dirty.optics = true;
+    this.dirty.views = true;
+    this.rebuild(performance.now() / 1000);
+    this.dirty.optics = false;
+    if (this.loomEditor.openId) this.loomEditor.refresh();
+  }
+
   /** Engine-2 card: re-cut its slots around the colours crossing it now (see recutLoom). */
   private recutCard(id: string): void {
     const cut = recutLoom(this.store.scene, id).elements.find((e) => e.id === id);
@@ -839,7 +890,7 @@ export class App {
   async renderLoopWav(): Promise<Blob> {
     if (this.dirty.optics) this.rebuild(performance.now() / 1000);
     const s = this.store.scene.settings;
-    return renderWav(this.plan, this.sources, s.bpm, s.masterDb, this.loopSeconds());
+    return renderWav(this.plan, this.sources, s.bpm, s.masterDb, this.loopSeconds(), this.moving);
   }
 
   private async record(): Promise<void> {

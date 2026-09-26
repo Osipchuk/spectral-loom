@@ -46,13 +46,29 @@ table in place and keeps what it plays.
     lens that gathers a colour makes that note louder and brighter), and its own stereo
     position from where it lands (turn a receptor across the table to widen the image).
 
+  - a slot's edges are soft: each ray stands for the strip of card up to its neighbours, so
+    a colour slides from one slot into the next gradually, and an open slot plays the
+    strongest colour falling through it (one note per hole, never a clash of seconds);
+  - a new card is written in notes and is cut the moment it is dropped into light, so it
+    plays what it says there; after that the glass decides.
+
   *Cut to light* in the card editor freezes what you hear: it re-cuts the slots around the
   colours crossing the card now, one colour per slot, keeping the notes currently playing.
+
+- **Clockwork (moving optics).** Any element with a direction can *Swing* (rock ± degrees
+  over N bars) or *Turn* (degrees per bar) by itself — Motion in the right panel. Each
+  pulse plays the glass as it stood when it set off (sampled every sixteenth); the light on
+  screen follows continuously. On V2 a swinging prism sweeps the rainbow along a card, and
+  the same holes play a line that bends up and down on its own.
+
+The tutorial runs on V2: it builds a spectrometer, cuts a card to its light, turns the
+prism (same holes, new notes) and sets it swinging.
 
 Converting a V1 scene cuts one slot per pitch exactly where that colour crosses the card,
 and trims receptor distances by a fraction of a cell where V1 had rounded a voice onto the
 grid, so the demos play the same notes. `tests/engine2.test.ts` checks this for every
-demo, and that turning an element never snaps a note across the grid in V2 (it does in V1).
+demo, and that turning an element never makes a note jump in time in V2 (under 4 ms; V1
+throws a voice a whole sixteenth). `tests/motion.test.ts` covers the clockwork.
 
 ## Run
 

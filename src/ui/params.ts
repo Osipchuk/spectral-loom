@@ -69,6 +69,68 @@ const rotation: Field<SceneElement> = {
   set: (el, v) => (el.rotation = (Number(v) * Math.PI) / 180),
 };
 
+/** Clockwork fields: any element that has a direction can turn or swing by itself. */
+const motionFields: Field<SceneElement>[] = [
+  {
+    key: 'motion',
+    label: 'Motion',
+    kind: 'select',
+    options: [
+      ['none', 'Still'],
+      ['swing', 'Swing'],
+      ['turn', 'Turn'],
+    ],
+    get: (el) => el.motion?.kind ?? 'none',
+    set: (el, v) => {
+      if (v === 'turn') el.motion = { kind: 'turn', degPerBar: 6 };
+      else if (v === 'swing') el.motion = { kind: 'swing', degrees: 6, bars: 4 };
+      else delete el.motion;
+    },
+  },
+  {
+    key: 'motionSwing',
+    label: 'Swing',
+    kind: 'range',
+    min: 1,
+    max: 45,
+    step: 0.5,
+    format: (v) => `±${v}°`,
+    hidden: (el) => el.motion?.kind !== 'swing',
+    get: (el) => (el.motion?.kind === 'swing' ? el.motion.degrees : 6),
+    set: (el, v) => {
+      if (el.motion?.kind === 'swing') el.motion.degrees = Number(v);
+    },
+  },
+  {
+    key: 'motionBars',
+    label: 'Swing period',
+    kind: 'range',
+    min: 1,
+    max: 32,
+    step: 1,
+    format: (v) => `${v} bar${v === 1 ? '' : 's'}`,
+    hidden: (el) => el.motion?.kind !== 'swing',
+    get: (el) => (el.motion?.kind === 'swing' ? el.motion.bars : 4),
+    set: (el, v) => {
+      if (el.motion?.kind === 'swing') el.motion.bars = Number(v);
+    },
+  },
+  {
+    key: 'motionSpeed',
+    label: 'Turn speed',
+    kind: 'range',
+    min: -45,
+    max: 45,
+    step: 0.5,
+    format: (v) => `${v > 0 ? '+' : ''}${v}°/bar`,
+    hidden: (el) => el.motion?.kind !== 'turn',
+    get: (el) => (el.motion?.kind === 'turn' ? el.motion.degPerBar : 6),
+    set: (el, v) => {
+      if (el.motion?.kind === 'turn') el.motion.degPerBar = Number(v);
+    },
+  },
+];
+
 const nm = (v: number): string => `${Math.round(v)} nm`;
 const pct = (v: number): string => `${Math.round(v * 100)}%`;
 const cells = (v: number): string => `${v.toFixed(1)} u`;
@@ -318,6 +380,10 @@ export const KIND_LABELS: Record<ElementKind, string> = {
 };
 
 const HELP: Record<string, string> = {
+  "motion": "Clockwork: let this piece move by itself as the music plays. Swing rocks it to and fro around its angle; Turn keeps rotating. The light follows, so the notes change over time — a swinging prism sweeps the rainbow across a card and the same holes play a rising and falling line.",
+  "motionSwing": "How far it rocks each way from its set angle. A few degrees already moves colours across a card's slots.",
+  "motionBars": "How many bars one full swing (there and back) takes.",
+  "motionSpeed": "Degrees per bar; negative turns the other way.",
   "rotation": "Which way the element faces. Hold Shift while rotating for 1° steps.",
   "emitter.spectrum": "White light holds every colour, so every note. A band emits only a slice of the rainbow, so only those notes.",
   "emitter.bandMin": "Where the band starts: 400 nm is violet (high notes), 700 nm is red (low notes).",
@@ -365,6 +431,11 @@ const HELP: Record<string, string> = {
   "global.raysPerSplit": "How many rays make up a rainbow. More rays, more distinct notes to catch.",
   "global.gridSnap": "Snap positions to half-cells while dragging."
 };
+
+// Everything that points somewhere can move by itself (a modulator is a round wheel).
+for (const [kind, fields] of Object.entries(ELEMENT_FIELDS)) {
+  if (kind !== 'modulator') fields.push(...motionFields);
+}
 
 /** Attach help texts: `kind.key` for elements, `global.key` for table settings. */
 for (const [kind, fields] of Object.entries(ELEMENT_FIELDS)) {
