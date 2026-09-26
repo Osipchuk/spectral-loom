@@ -305,6 +305,11 @@ export class Atmosphere {
    * @param aspect viewport width/height
    * @param parallax camera orbit offset, for depth in the backdrop
    */
+  /** Draw only the first `n` motes (quality setting). */
+  setMoteCount(n: number): void {
+    this.motes.geometry.setDrawRange(0, Math.min(n, MOTE_COUNT));
+  }
+
   update(time: number, pixelRatio: number, energy = 0, aspect = 1, parallax = new THREE.Vector2()): void {
     this.energy += (Math.min(1, energy) - this.energy) * 0.05;
     for (const k of Object.keys(this.weather) as (keyof Weather)[]) this.weather[k] += (this.target[k] - this.weather[k]) * 0.008;

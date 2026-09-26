@@ -387,6 +387,7 @@ export class Diorama {
       grass.setMatrixAt(gi++, m.compose(new THREE.Vector3(x, groundAt(x, z), z), q.setFromAxisAngle(up, rand() * 6.28), new THREE.Vector3(s, s, s)));
     }
     grass.count = gi;
+    this.grass = grass;
     this.group.add(grass);
     this.disposables.push(blade, grassMat);
 
@@ -494,6 +495,11 @@ export class Diorama {
   }
 
   private mist: THREE.Sprite[] = [];
+  private grass: THREE.InstancedMesh | null = null;
+
+  setGrass(on: boolean): void {
+    if (this.grass) this.grass.visible = on;
+  }
 
   /** Soft banks of mist drifting over the water; they thicken with the `mist` weather. */
   private updateMist(w: Weather, time: number): void {

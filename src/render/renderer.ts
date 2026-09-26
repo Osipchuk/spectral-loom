@@ -64,6 +64,20 @@ export interface CameraAngles {
 
 export const ZOOM_LIMITS = { min: 0.85, max: 3.2 };
 
+export type Quality = 'eco' | 'balanced' | 'high';
+
+/**
+ * What each quality level costs. Balanced is the default: it keeps the look but drops the
+ * two most expensive things — rendering above the display's CSS resolution and the extra
+ * full-scene pass real glass transmission needs. Eco also halves the frame rate, which
+ * leaves the CPU to the audio thread on weak laptops.
+ */
+export const QUALITY: Record<Quality, { maxPixelRatio: number; samples: number; shadows: number; transmission: boolean; motes: number; grass: boolean; fps: number }> = {
+  eco: { maxPixelRatio: 0.75, samples: 0, shadows: 0, transmission: false, motes: 500, grass: false, fps: 30 },
+  balanced: { maxPixelRatio: 1, samples: 2, shadows: 1024, transmission: false, motes: 1200, grass: true, fps: 60 },
+  high: { maxPixelRatio: 2, samples: 4, shadows: 2048, transmission: true, motes: 2200, grass: true, fps: 60 },
+};
+
 export const CAMERA_LIMITS = { azimuth: 0.42, polarMin: 0.42, polarMax: 0.86 };
 
 export class Renderer {
@@ -90,12 +104,14 @@ export class Renderer {
   private size = new THREE.Vector2(1, 1);
   /** Screen space (CSS px) covered by UI panels; the table is framed in what remains. */
   private insets = { left: 0, right: 0, top: 0, bottom: 0 };
-  private basePixelRatio = Math.min(window.devicePixelRatio, 2);
+  private basePixelRatio = Math.min(window.devicePixelRatio, 1);
+  quality: Quality = 'balanced';
   private pixelRatio = this.basePixelRatio;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
     scene: SceneModel,
+    quality: Quality = 'balanced',
   ) {
     this.frame = new TableFrame(scene.table.w, scene.table.h);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -151,6 +167,7 @@ export class Renderer {
     this.composer.addPass(new OutputPass());
     this.finish = new ShaderPass(FinishShader);
     this.composer.addPass(this.finish);
+    this.setQuality(quality);
     this.updateCamera();
   }
 
@@ -167,13 +184,40 @@ export class Renderer {
     if (new URLSearchParams(location.search).has('fixedres')) return;
     let next = this.pixelRatio;
     // Never render below the display's CSS resolution: a soft image is worse than 45 fps.
-    const floor = Math.min(1, this.basePixelRatio);
+    const floor = Math.min(0.75, this.basePixelRatio);
     if (frameMs > 24 && this.pixelRatio > floor) next = Math.max(floor, this.pixelRatio - 0.25);
     else if (frameMs < 13 && this.pixelRatio < this.basePixelRatio) next = Math.min(this.basePixelRatio, this.pixelRatio + 0.25);
     if (next === this.pixelRatio) return;
     this.pixelRatio = next;
     this.renderer.setPixelRatio(next);
     this.composer.setPixelRatio(next);
+    const { x, y } = this.size;
+    this.size.set(0, 0);
+    this.resize(x, y);
+  }
+
+  /** Switch the quality level at runtime (resolution, AA, shadows, glass, particles). */
+  setQuality(q: Quality): void {
+    this.quality = q;
+    const cfg = QUALITY[q];
+    this.basePixelRatio = Math.min(window.devicePixelRatio, cfg.maxPixelRatio);
+    this.pixelRatio = this.basePixelRatio;
+    this.renderer.setPixelRatio(this.pixelRatio);
+    this.composer.setPixelRatio(this.pixelRatio);
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      rt.samples = cfg.samples;
+      rt.dispose();
+    }
+    this.renderer.shadowMap.enabled = cfg.shadows > 0;
+    this.key.castShadow = cfg.shadows > 0;
+    if (cfg.shadows > 0) {
+      this.key.shadow.mapSize.set(cfg.shadows, cfg.shadows);
+      this.key.shadow.map?.dispose();
+      this.key.shadow.map = null;
+    }
+    this.materials.setTransmission(cfg.transmission);
+    this.atmosphere.setMoteCount(cfg.motes);
+    this.diorama.setGrass(cfg.grass);
     const { x, y } = this.size;
     this.size.set(0, 0);
     this.resize(x, y);

@@ -15,6 +15,7 @@ export interface TransportCallbacks {
   onLoad(file: File): void;
   onRecord(): void;
   onVolume(db: number): void;
+  onQuality(q: 'eco' | 'balanced' | 'high'): void;
 }
 
 /** Top bar: play, scene picker, save/load, record, volume; plus the scene caption. */
@@ -30,6 +31,7 @@ export class Transport {
     private demos: DemoScene[],
     cb: TransportCallbacks,
     masterDb: number,
+    quality: 'eco' | 'balanced' | 'high',
   ) {
     this.playBtn = h('button.sl-tbtn.sl-play', { type: 'button', 'aria-label': 'Play' }, svgIcon(PLAY));
     this.playBtn.addEventListener('click', () => cb.onPlayToggle());
@@ -65,6 +67,17 @@ export class Transport {
     const vol = h('input.sl-range.sl-vol', { type: 'range', min: -40, max: 0, step: 1, value: masterDb, 'aria-label': 'Volume' });
     vol.addEventListener('input', () => cb.onVolume(Number(vol.value)));
 
+    const qualitySel = h('select.sl-select.sl-quality', { 'aria-label': 'Graphics quality', title: 'Graphics quality: lower it if sound stutters' });
+    for (const [v, t] of [
+      ['eco', 'Eco'],
+      ['balanced', 'Balanced'],
+      ['high', 'High'],
+    ]) {
+      qualitySel.append(h('option', { value: v, text: t }));
+    }
+    qualitySel.value = quality;
+    qualitySel.addEventListener('change', () => cb.onQuality(qualitySel.value as 'eco' | 'balanced' | 'high'));
+
     const beats = h('div.sl-beats', { 'aria-hidden': 'true' });
     for (let i = 0; i < 4; i++) {
       const d = h('span.sl-beat');
@@ -86,6 +99,8 @@ export class Transport {
       file,
       h('span.sl-sep'),
       h('span.sl-vol-wrap', {}, svgIcon(VOLUME), vol),
+      h('span.sl-sep'),
+      qualitySel,
     );
     this.caption = h('div.sl-caption');
   }

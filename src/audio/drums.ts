@@ -80,7 +80,14 @@ export class DrumKit {
     );
   }
 
+  /** Last scheduled start per piece: Tone's noise sources refuse starts that are not later. */
+  private lastHit = new Map<number, number>();
+
   hit(piece: number, time: number, velocity: number): void {
+    const last = this.lastHit.get(piece) ?? -Infinity;
+    // Two beams striking the same drum on the same step are one hit, not an error.
+    if (time <= last + 0.001) return;
+    this.lastHit.set(piece, time + (piece === 3 ? 0.012 : 0));
     const v = Math.max(0.05, Math.min(1, velocity));
     switch (piece) {
       case 0:

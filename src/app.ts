@@ -16,7 +16,7 @@ import type { RayTree } from './optics/types';
 import { dot, fromAngle, perp, sub } from './optics/vec2';
 import { drawCard } from './render/elements/loom-card';
 import { INSTRUMENT_COLORS } from './render/elements/element-views';
-import { Renderer } from './render/renderer';
+import { QUALITY, Renderer, type Quality } from './render/renderer';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
 import { SceneStore, type ChangeKind } from './scene/store';
@@ -110,7 +110,7 @@ export class App {
     this.root = h('div.sl-root', { tabindex: 0 }, this.canvas);
     host.append(this.root);
 
-    this.renderer = new Renderer(this.canvas, this.store.scene);
+    this.renderer = new Renderer(this.canvas, this.store.scene, loadQuality());
     this.previewClock = new BeatClock(scene.settings.bpm);
     this.previewClock.anchor(performance.now() / 1000, 0);
     const shared = this.renderer.beams.shared;
@@ -133,12 +133,18 @@ export class App {
         onSave: () => this.saveScene(),
         onLoad: (f) => void this.loadFile(f),
         onRecord: () => void this.record(),
+        onQuality: (q) => {
+          this.renderer.setQuality(q);
+          saveQuality(q);
+          this.resize();
+        },
         onVolume: (db) => {
           this.store.scene.settings.masterDb = db;
           this.engine.setMasterDb(db);
         },
       },
       scene.settings.masterDb,
+      this.renderer.quality,
     );
     this.transport.setScene(this.demoId);
 
@@ -499,10 +505,18 @@ export class App {
     return out;
   }
 
+  private lastFrame = 0;
+
   private frame = (): void => {
     this.raf = 0;
     if (this.capture || !this.visible || document.hidden) return;
-    this.renderAt(performance.now() / 1000, null);
+    const now = performance.now() / 1000;
+    // Frame cap (Eco draws at 30 fps to leave CPU for audio).
+    const minDt = 1 / QUALITY[this.renderer.quality].fps - 0.004;
+    if (now - this.lastFrame >= minDt) {
+      this.lastFrame = now;
+      this.renderAt(now, null);
+    }
     this.schedule();
   };
 
@@ -743,6 +757,26 @@ export class App {
     this.pulseTexture.dispose();
     this.renderer.dispose();
     this.root.remove();
+  }
+}
+
+const QUALITY_KEY = 'spectral-loom:quality';
+
+function loadQuality(): Quality {
+  try {
+    const v = localStorage.getItem(QUALITY_KEY);
+    if (v === 'eco' || v === 'balanced' || v === 'high') return v;
+  } catch {
+    // Storage can be unavailable (private mode, sandboxed iframe): fall back to the default.
+  }
+  return 'balanced';
+}
+
+function saveQuality(q: Quality): void {
+  try {
+    localStorage.setItem(QUALITY_KEY, q);
+  } catch {
+    // Not persisted; the choice still applies for this visit.
   }
 }
 

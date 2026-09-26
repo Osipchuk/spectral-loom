@@ -103,6 +103,11 @@ export class Materials {
         envMapIntensity: 1.2,
         depthWrite: false,
       });
+      if (!this.transmission) {
+        m.transmission = 0;
+        m.transparent = true;
+        m.opacity = 0.6;
+      }
       this.tinted.set(key, m);
     }
     return m;
@@ -118,6 +123,34 @@ export class Materials {
     }
     return m;
   }
+
+  /**
+   * Real transmission renders the scene an extra time. Without it, glass is drawn as a
+   * clear, reflective, slightly transparent surface — close in look, far cheaper.
+   */
+  setTransmission(on: boolean): void {
+    const glassy: [THREE.MeshPhysicalMaterial, number, number][] = [
+      [this.glass, 1, 0.3],
+      [this.splitter, 0.55, 0.55],
+      [this.comb, 0.6, 0.5],
+    ];
+    for (const [m, transmission, opacity] of glassy) {
+      m.transmission = on ? transmission : 0;
+      m.transparent = !on;
+      m.opacity = on ? 1 : opacity;
+      m.needsUpdate = true;
+    }
+    for (const m of this.tinted.values()) {
+      if (!(m instanceof THREE.MeshPhysicalMaterial)) continue;
+      m.transmission = on ? 0.85 : 0;
+      m.transparent = !on;
+      m.opacity = on ? 1 : 0.6;
+      m.needsUpdate = true;
+    }
+    this.transmission = on;
+  }
+
+  private transmission = true;
 
   dispose(): void {
     for (const m of [this.glass, this.chrome, this.splitter, this.comb, this.anodized, this.brass, this.velvet, this.ghost, this.pick]) m.dispose();

@@ -52,6 +52,8 @@ export function cutoffFor(instrument: Instrument, brightness: number): number {
 
 export type AudioStatus = 'running' | 'suspended';
 
+let playbackContextInstalled = false;
+
 /**
  * Owns the Tone.js graph and the look-ahead scheduler. Notes are computed from the note
  * plan for a window slightly ahead of the audio clock and handed to Tone with explicit
@@ -88,6 +90,13 @@ export class AudioEngine {
 
   /** Must be called from a user gesture. Builds the graph once. */
   async start(masterDb: number): Promise<void> {
+    if (!playbackContextInstalled) {
+      // A "playback" context uses larger audio buffers: a little more output latency (which
+      // the visuals already compensate for) in exchange for far fewer dropouts when the
+      // page is busy drawing.
+      Tone.setContext(new Tone.Context({ latencyHint: 'playback', lookAhead: 0 }));
+      playbackContextInstalled = true;
+    }
     await Tone.start();
     await this.buildGraph(masterDb);
   }
@@ -301,7 +310,7 @@ type MonoVoice = Tone.Synth | Tone.MonoSynth | Tone.FMSynth;
 
 class VoicePool implements Player {
   readonly output: Tone.Gain;
-  private voices: { synth: MonoVoice; busyUntil: number }[] = [];
+  private voices: { synth: MonoVoice; busyUntil: number; lastStart: number }[] = [];
 
   constructor(
     context: Tone.BaseContext,
@@ -313,15 +322,20 @@ class VoicePool implements Player {
     for (let i = 0; i < size; i++) {
       const synth = make();
       synth.connect(this.output);
-      this.voices.push({ synth, busyUntil: 0 });
+      this.voices.push({ synth, busyUntil: 0, lastStart: -Infinity });
     }
   }
 
   play(midi: number, holdS: number, time: number, velocity: number): void {
-    const free = this.voices.find((v) => v.busyUntil <= time);
-    const v = free ?? this.voices.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b));
+    // Only voices whose last attack is strictly earlier can take this note (Tone requires
+    // monotonic start times per source).
+    const usable = this.voices.filter((v) => v.lastStart < time - 0.001);
+    if (usable.length === 0) return;
+    const free = usable.find((v) => v.busyUntil <= time);
+    const v = free ?? usable.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b));
     v.synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity);
     v.busyUntil = time + holdS + this.releaseS + 0.05;
+    v.lastStart = time;
   }
 
   release(time: number): void {

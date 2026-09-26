@@ -618,6 +618,11 @@
 .sl-root .sl-vol {
   width: 72px;
 }
+.sl-root .sl-select.sl-quality {
+  font: 400 11px/1 var(--sl-sans);
+  color: var(--sl-fg-dim);
+  padding: 6px 22px 6px 6px;
+}
 
 /* ---------- scene caption ---------- */
 .sl-root .sl-caption {
