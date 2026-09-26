@@ -12,7 +12,7 @@ export interface Vec2 {
 export type NodeId = string;
 
 export type Subdivision = '1/4' | '1/8' | '1/16';
-export type Instrument = 'pad' | 'pluck' | 'bell';
+export type Instrument = 'pad' | 'pluck' | 'bell' | 'drums';
 export type ScaleName = 'majorPent' | 'minorPent' | 'dorian' | 'major' | 'minor';
 
 export type SpectrumSpec = { kind: 'white' } | { kind: 'band'; minNm: number; maxNm: number };

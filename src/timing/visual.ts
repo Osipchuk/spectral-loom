@@ -1,4 +1,4 @@
-import { lightToDegree } from '../music/pitch';
+import { lightToDegree, receptorPitch } from '../music/pitch';
 import type { RayTree } from '../optics/types';
 import type { Instrument, SceneModel } from '../scene/types';
 import type { NoteTemplate } from './arrivals';
@@ -6,7 +6,7 @@ import type { BeatClock } from './clock';
 import { pulsesInRange, type PulseSource } from './sources';
 
 /** Envelope slot used by segments; 0 = neutral (light that reaches no receptor). */
-export const ENV_SLOTS: (Instrument | 'neutral')[] = ['neutral', 'pad', 'pluck', 'bell'];
+export const ENV_SLOTS: (Instrument | 'neutral')[] = ['neutral', 'pad', 'pluck', 'bell', 'drums'];
 
 /** Pulses on segments closer together than this merge into one held plateau (≤ 3 Hz). */
 export const MIN_VISUAL_GAP_S = 1 / 3;
@@ -30,7 +30,7 @@ export interface VisualLayout {
   segments: Map<number, SegmentVisual>;
 }
 
-const RELEASE_RANK: Record<Instrument | 'neutral', number> = { neutral: 0, pluck: 1, bell: 2, pad: 3 };
+const RELEASE_RANK: Record<Instrument | 'neutral', number> = { neutral: 0, drums: 0.5, pluck: 1, bell: 2, pad: 3 };
 
 /**
  * Decide, for every segment, which pulses it carries and which envelope shapes its swell,
@@ -64,7 +64,7 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
   for (const hit of tree.receptorHits) {
     const r = byId.get(hit.receptorId);
     if (r?.kind !== 'receptor') continue;
-    const deg = lightToDegree(hit.light, { scale: scene.settings.scale, span: r.span });
+    const deg = lightToDegree(hit.light, receptorPitch(scene.settings, r));
     const t = plan.find(
       (p) => p.receptorId === r.id && p.sourceId === hit.pulseSourceId && p.echo === hit.bounces && p.degree === deg,
     );

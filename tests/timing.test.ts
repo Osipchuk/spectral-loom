@@ -110,6 +110,19 @@ describe('timing', () => {
     expect(build(2) / build(4)).toBeCloseTo(2, 6);
   });
 
+  it('turns a rainbow into a drum kit on a drum receptor: red is the kick', () => {
+    const s = emptyScene();
+    s.settings.quantize = 0;
+    s.elements.push(makeElement('emitter', { x: 3, y: 14 }, 0, { pulse: '1/4' }));
+    s.elements.push(makeElement('prism', { x: 12, y: 14 }, (70 * Math.PI) / 180, { size: 4 }));
+    s.elements.push(makeElement('receptor', { x: 24, y: 4 }, (140 * Math.PI) / 180, { aperture: 12, instrument: 'drums', voices: 6 }));
+    const tree = trace(s);
+    const plan = planNotes(s, tree);
+    expect(plan.map((t) => t.midi).sort()).toEqual([36, 37, 38, 39, 40, 41]);
+    const reddest = [...tree.receptorHits].sort((a, b) => (b.light as { nm: number }).nm - (a.light as { nm: number }).nm)[0]!;
+    expect(wavelengthToDegree((reddest.light as { nm: number }).nm, { scale: 'major', span: 1, kit: true })).toBe(0);
+  });
+
   it('plays only the loom card degrees at each step', () => {
     const s = emptyScene();
     s.settings.quantize = 0;

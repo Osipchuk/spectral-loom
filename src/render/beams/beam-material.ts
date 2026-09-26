@@ -78,7 +78,7 @@ uniform float uLightSpeed;
 uniform float uPulsesOn;
 uniform sampler2D uPulses;
 uniform sampler2D uNoise;
-uniform vec4 uEnv[4];
+uniform vec4 uEnv[5];
 varying float vEnv;
 varying float vT;
 varying float vOffset;
@@ -222,7 +222,7 @@ export function createSharedUniforms(): BeamSharedUniforms {
     uLightSpeed: { value: 6 },
     uPulsesOn: { value: 0 },
     uPulses: { value: null },
-    uEnv: { value: [new THREE.Vector4(0.08, 0.2, 0, 0.3), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
+    uEnv: { value: [new THREE.Vector4(0.08, 0.2, 0, 0.3), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
   };
 }
 

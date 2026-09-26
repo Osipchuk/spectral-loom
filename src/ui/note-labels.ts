@@ -8,6 +8,8 @@ import { h } from './dom';
 export interface NoteLabel {
   receptorId: string;
   midi: number;
+  /** What to print: a note name, or a drum for drum receptors. */
+  text: string;
   /** Table position where this pitch's light lands. */
   at: Vec2;
   /** Direction pointing out of the receptor's back, to place the label behind it. */
@@ -31,7 +33,7 @@ export class NoteLabels {
   set(labels: NoteLabel[], toWorld: (p: Vec2, y: number) => THREE.Vector3): void {
     this.el.replaceChildren();
     this.items = labels.map((label) => {
-      const node = h('span.sl-note', { text: midiName(label.midi) });
+      const node = h('span.sl-note', { text: label.text });
       const [r, g, b] = label.rgb.map((c) => Math.round(Math.min(1, c) * 255));
       node.style.setProperty('--c', `rgb(${r},${g},${b})`);
       this.el.append(node);

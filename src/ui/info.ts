@@ -32,7 +32,7 @@ export const ELEMENT_INFO: Record<ElementKind, { light: string; music: string }>
   },
   receptor: {
     light: 'Catches light that hits its front slit.',
-    music: 'The instrument. Every colour it catches is a note; wide apertures catch chords. Tilt it across a rainbow to strum.',
+    music: 'The instrument. Every colour it catches is a note; wide apertures catch chords. Tilt it across a rainbow to strum. As Drums, colour picks the drum: red kick, then tom, snare, clap, hat, violet open hat.',
   },
   blocker: {
     light: 'Absorbs light completely.',

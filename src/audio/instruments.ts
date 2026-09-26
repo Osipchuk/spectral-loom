@@ -15,11 +15,13 @@ export const ENVELOPES: Record<Instrument, EnvelopeSpec> = {
   pad: { attack: 0.35, decay: 0.6, sustain: 0.7, release: 1.8 },
   pluck: { attack: 0.004, decay: 0.45, sustain: 0.0, release: 0.5 },
   bell: { attack: 0.003, decay: 1.6, sustain: 0.0, release: 1.4 },
+  drums: { attack: 0.002, decay: 0.2, sustain: 0.0, release: 0.15 },
 };
 
 /** How long (seconds) a note is held before release, given its pulse length. */
 export function holdSeconds(instrument: Instrument, pulseSeconds: number): number {
   if (instrument === 'pad') return Math.max(0.25, pulseSeconds * 0.95);
+  if (instrument === 'drums') return 0.05;
   return 0.08;
 }
 

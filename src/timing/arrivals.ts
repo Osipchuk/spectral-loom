@@ -1,4 +1,4 @@
-import { lightToDegree, degreeToMidi } from '../music/pitch';
+import { degreeToMidi, lightToDegree, receptorPitch } from '../music/pitch';
 import type { RayTree } from '../optics/types';
 import type { Instrument, Receptor, SceneModel } from '../scene/types';
 import { pulsesInRange, type PulseSource } from './sources';
@@ -73,7 +73,7 @@ export function travelBeats(distance: number, c: number): number {
 export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
   const receptors = new Map<string, Receptor>();
   for (const el of scene.elements) if (el.kind === 'receptor' && el.enabled) receptors.set(el.id, el);
-  const { c, quantize, scale, root } = scene.settings;
+  const { c, quantize } = scene.settings;
 
   type Acc = { power: number; rays: number; first: number };
   type Group = {
@@ -99,7 +99,8 @@ export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
       g = { receptor: r, sourceId: hit.pulseSourceId, echo: hit.bounces, degrees: new Map(), uMin: Infinity, uMax: -Infinity, widthSum: 0, powerSum: 0, hits: 0 };
       groups.set(key, g);
     }
-    const deg = lightToDegree(hit.light, { scale, span: r.span });
+    const pc = receptorPitch(scene.settings, r);
+    const deg = lightToDegree(hit.light, pc);
     const t = travelBeats(hit.s - hit.pulseOriginS, c);
     const a = g.degrees.get(deg) ?? { power: 0, rays: 0, first: Infinity };
     a.power += hit.intensity;
@@ -132,7 +133,7 @@ export function planNotes(scene: SceneModel, tree: RayTree): NoteTemplate[] {
         receptorId: r.id,
         sourceId: g.sourceId,
         degree: deg,
-        midi: degreeToMidi(deg, { scale, root, octave: r.octave, span: r.span }),
+        midi: degreeToMidi(deg, receptorPitch(scene.settings, r)),
         velocity,
         offsetBeats: a.first + shift,
         travelBeats: a.first,

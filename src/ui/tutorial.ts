@@ -14,7 +14,8 @@ export interface TutorialHost {
   finish(): void;
 }
 
-const SNAP_RADIUS = 4;
+/** Drops within this distance of the outline click into place. */
+const SNAP_RADIUS = 7;
 
 /** "Ah vous dirai-je, maman" — Twinkle, Twinkle, Little Star (18th-century French tune). */
 const TWINKLE =
@@ -201,8 +202,9 @@ export class Tutorial {
       if (candidates.length === 0) return;
       const nearest = candidates.reduce((a, b) => (dist(a.pos, target.pos) <= dist(b.pos, target.pos) ? a : b));
       if (!dropped) return;
-      if (dist(nearest.pos, target.pos) > SNAP_RADIUS) {
-        this.hint.textContent = 'Close — drop it on the glowing outline and it will click into place.';
+      // The first element of the kind always goes to its spot; later ones must be close.
+      if (candidates.length > 1 && dist(nearest.pos, target.pos) > SNAP_RADIUS) {
+        this.hint.textContent = 'Drop it on the glowing outline and it will click into place.';
         return;
       }
       const { id: _id, ...params } = structuredClone(target);

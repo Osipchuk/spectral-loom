@@ -166,6 +166,7 @@ export const ELEMENT_FIELDS: Record<ElementKind, Field<SceneElement>[]> = {
       ['pad', 'Pad'],
       ['pluck', 'Pluck'],
       ['bell', 'Bell'],
+      ['drums', 'Drums'],
     ]),
     num('octave', 'Octave', 1, 6, 1),
     num('span', 'Octave span', 1, 3, 1),

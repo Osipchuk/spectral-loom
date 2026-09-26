@@ -4,6 +4,7 @@ import type { Instrument } from '../scene/types';
 import { notesInWindow, type NoteEvent, type NoteTemplate } from '../timing/arrivals';
 import { BeatClock } from '../timing/clock';
 import type { PulseSource } from '../timing/sources';
+import { DRUM_BASE_MIDI, DrumKit } from './drums';
 import { ENVELOPES, holdSeconds } from './instruments';
 
 const LOOKAHEAD_S = 0.3;
@@ -20,28 +21,43 @@ interface Bus {
   input: Tone.Gain;
 }
 
-/** Each receptor has its own synth, tone filter and stereo position. */
+/** Anything a receptor can play through: a polyphonic synth or the drum kit. */
+interface Player {
+  play(midi: number, holdS: number, time: number, velocity: number): void;
+  release(time: number): void;
+  output: Tone.ToneAudioNode;
+  dispose(): void;
+}
+
+/** Each receptor has its own player, tone filter and stereo position. */
 interface ReceptorVoice {
   instrument: Instrument;
-  synth: Tone.PolySynth;
+  player: Player;
   filter: Tone.Filter;
   panner: Tone.Panner;
 }
 
 /** Filter cutoff for a receptor: diffuse light sounds warm, focused light bright. */
 export function cutoffFor(instrument: Instrument, brightness: number): number {
-  const base = instrument === 'pad' ? 1300 : instrument === 'pluck' ? 2400 : 3600;
+  const base = instrument === 'pad' ? 1300 : instrument === 'pluck' ? 2400 : instrument === 'drums' ? 5000 : 3600;
   return Math.min(16000, base * 2 ** (brightness * 2.4));
 }
+
+export type AudioStatus = 'running' | 'suspended';
 
 /**
  * Owns the Tone.js graph and the look-ahead scheduler. Notes are computed from the note
  * plan for a window slightly ahead of the audio clock and handed to Tone with explicit
  * times; nothing is ever triggered from UI or render callbacks.
+ *
+ * The engine remembers the context it was built in and never reads Tone's global context
+ * afterwards: an offline recording swaps the global context, and a live engine that
+ * followed it would build voices in the wrong context and fall silent.
  */
 export class AudioEngine {
   readonly clock: BeatClock;
-  private voices: Record<Instrument, Bus> | null = null;
+  private ctx: Tone.BaseContext | null = null;
+  private buses: Record<Instrument, Bus> | null = null;
   private receptorVoices = new Map<string, ReceptorVoice>();
   private nodes: Tone.ToneAudioNode[] = [];
   private master: Tone.Volume | null = null;
@@ -51,13 +67,16 @@ export class AudioEngine {
   private sources = new Map<string, PulseSource>();
   private recent: ScheduledNote[] = [];
   playing = false;
+  /** Called when the browser suspends or resumes audio. */
+  onStatus: ((s: AudioStatus) => void) | null = null;
+  private lastStatus: AudioStatus = 'running';
 
   constructor(bpm: number) {
     this.clock = new BeatClock(bpm);
   }
 
   get ready(): boolean {
-    return this.voices !== null;
+    return this.buses !== null;
   }
 
   /** Must be called from a user gesture. Builds the graph once. */
@@ -66,31 +85,41 @@ export class AudioEngine {
     await this.buildGraph(masterDb);
   }
 
+  /** Try to resume a context the browser suspended (call from a user gesture). */
+  async resume(): Promise<void> {
+    const raw = this.ctx?.rawContext as AudioContext | undefined;
+    if (raw && raw.state !== 'running' && 'resume' in raw) await raw.resume();
+    this.checkStatus();
+  }
+
   /** Build the synth graph in the current Tone context (live or offline). */
   async buildGraph(masterDb: number): Promise<void> {
-    if (this.voices) return;
-    const master = new Tone.Volume(masterDb).toDestination();
-    const limiter = new Tone.Limiter(-1).connect(master);
-    const comp = new Tone.Compressor({ threshold: -18, ratio: 2.5, attack: 0.01, release: 0.25 }).connect(limiter);
-    const reverb = new Tone.Reverb({ decay: 6.5, preDelay: 0.03, wet: 1 }).connect(comp);
+    if (this.buses) return;
+    const context = Tone.getContext();
+    this.ctx = context;
+    const master = new Tone.Volume({ volume: masterDb, context }).connect(context.destination);
+    const limiter = new Tone.Limiter({ threshold: -1, context }).connect(master);
+    const comp = new Tone.Compressor({ threshold: -18, ratio: 2.5, attack: 0.01, release: 0.25, context }).connect(limiter);
+    const reverb = new Tone.Reverb({ decay: 6.5, preDelay: 0.03, wet: 1, context }).connect(comp);
     await reverb.ready;
-    const delay = new Tone.PingPongDelay({ delayTime: '8n.', feedback: 0.28, wet: 1 }).connect(reverb);
-    const dry = new Tone.Gain(1).connect(comp);
+    const delay = new Tone.PingPongDelay({ delayTime: '8n.', feedback: 0.28, wet: 1, context }).connect(reverb);
+    const dry = new Tone.Gain({ gain: 1, context }).connect(comp);
 
     const bus = (level: number, reverbSend: number, delaySend: number): Bus => {
-      const input = new Tone.Gain(level);
+      const input = new Tone.Gain({ gain: level, context });
       input.connect(dry);
-      const r = new Tone.Gain(reverbSend).connect(reverb);
-      const d = new Tone.Gain(delaySend).connect(delay);
+      const r = new Tone.Gain({ gain: reverbSend, context }).connect(reverb);
+      const d = new Tone.Gain({ gain: delaySend, context }).connect(delay);
       input.connect(r);
       input.connect(d);
       this.nodes.push(input, r, d);
       return { input };
     };
-    this.voices = {
+    this.buses = {
       pad: bus(0.85, 0.55, 0.05),
       pluck: bus(1.3, 0.3, 0.22),
       bell: bus(1.15, 0.5, 0.18),
+      drums: bus(1.0, 0.12, 0.04),
     };
     this.master = master;
     this.nodes.push(limiter, comp, reverb, delay, dry, master);
@@ -104,25 +133,28 @@ export class AudioEngine {
     for (const [id, v] of this.receptorVoices) {
       if (live.has(`${id}|${v.instrument}`)) continue;
       this.receptorVoices.delete(id);
-      const dispose = (): void => {
-        v.synth.dispose();
-        v.filter.dispose();
-        v.panner.dispose();
-      };
-      if (Tone.getContext().rawContext instanceof OfflineAudioContext) dispose();
+      const dispose = (): void => this.disposeVoice(v);
+      if (this.ctx?.rawContext instanceof OfflineAudioContext) dispose();
       else window.setTimeout(dispose, 6000);
     }
   }
 
+  private disposeVoice(v: ReceptorVoice): void {
+    v.player.dispose();
+    v.filter.dispose();
+    v.panner.dispose();
+  }
+
   private voiceFor(receptorId: string, instrument: Instrument): ReceptorVoice | null {
-    if (!this.voices) return null;
+    if (!this.buses || !this.ctx) return null;
     const existing = this.receptorVoices.get(receptorId);
     if (existing && existing.instrument === instrument) return existing;
-    const synth = createSynth(instrument);
-    const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12 });
-    const panner = new Tone.Panner(0);
-    synth.chain(filter, panner, this.voices[instrument].input);
-    const v = { instrument, synth, filter, panner };
+    const context = this.ctx;
+    const player = createPlayer(instrument, context);
+    const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12, context });
+    const panner = new Tone.Panner({ pan: 0, context });
+    player.output.chain(filter, panner, this.buses[instrument].input);
+    const v = { instrument, player, filter, panner };
     this.receptorVoices.set(receptorId, v);
     return v;
   }
@@ -132,6 +164,10 @@ export class AudioEngine {
   }
 
   setBpm(bpm: number): void {
+    if (!this.ctx) {
+      this.clock.bpm = bpm;
+      return;
+    }
     const now = this.contextTime();
     this.clock.setBpm(bpm, now);
     // Already-scheduled notes stay; continue from the same beat position.
@@ -139,40 +175,52 @@ export class AudioEngine {
   }
 
   play(): void {
-    if (!this.voices || this.playing) return;
+    if (!this.buses || !this.ctx || this.playing) return;
     const now = this.contextTime() + 0.08;
     this.clock.anchor(now, Math.ceil(this.clock.beatAt(now)));
     this.scheduledUntil = this.clock.beatAt(now);
     this.playing = true;
-    this.interval = Tone.getContext().setInterval(() => this.tick(), TICK_S);
+    this.interval = this.ctx.setInterval(() => this.tick(), TICK_S);
     this.tick();
   }
 
   pause(): void {
     if (!this.playing) return;
     this.playing = false;
-    if (this.interval !== null) Tone.getContext().clearInterval(this.interval);
+    if (this.interval !== null) this.ctx?.clearInterval(this.interval);
     this.interval = null;
     const now = this.contextTime();
-    for (const v of this.receptorVoices.values()) v.synth.releaseAll(now);
+    for (const v of this.receptorVoices.values()) v.player.release(now);
     this.recent = [];
   }
 
+  private checkStatus(): void {
+    const raw = this.ctx?.rawContext as AudioContext | undefined;
+    if (!raw || raw instanceof OfflineAudioContext) return;
+    const status: AudioStatus = raw.state === 'running' ? 'running' : 'suspended';
+    if (status !== this.lastStatus) {
+      this.lastStatus = status;
+      this.onStatus?.(status);
+    }
+  }
+
   private tick(): void {
-    if (!this.voices || !this.playing) return;
+    if (!this.buses || !this.playing) return;
+    this.checkStatus();
     const now = this.contextTime();
     const toBeat = this.clock.beatAt(now + LOOKAHEAD_S);
+    // If the main thread stalled, skip what is already late rather than bunching it up.
     const fromBeat = Math.max(this.scheduledUntil, this.clock.beatAt(now));
     if (toBeat <= fromBeat) return;
     this.scheduleBeats(fromBeat, toBeat, now);
   }
 
   /**
-   * Hand every note with onset in [fromBeat, toBeat) to the synths. `firstLaunch` drops
+   * Hand every note with onset in [fromBeat, toBeat) to the players. `firstLaunch` drops
    * notes from pulses launched before it (a recording starts with no light in flight).
    */
   scheduleBeats(fromBeat: number, toBeat: number, now: number, firstLaunch = -Infinity): void {
-    if (!this.voices) return;
+    if (!this.buses) return;
     const events = notesInWindow(this.templates, this.sources, fromBeat, toBeat).filter((e) => e.launchBeat >= firstLaunch);
     this.scheduledUntil = toBeat;
     for (const e of events) {
@@ -181,9 +229,17 @@ export class AudioEngine {
       const holdS = holdSeconds(e.instrument, e.lenBeats * this.clock.secondsPerBeat);
       const v = this.voiceFor(e.receptorId, e.instrument);
       if (!v) continue;
-      v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, e.brightness), Math.max(now, time - 0.05), 0.08);
-      v.panner.pan.setTargetAtTime(e.pan, Math.max(now, time - 0.05), 0.1);
-      v.synth.triggerAttackRelease(midiToFrequency(e.midi), holdS, time, e.velocity);
+      try {
+        v.filter.frequency.setTargetAtTime(cutoffFor(e.instrument, e.brightness), Math.max(now, time - 0.05), 0.08);
+        v.panner.pan.setTargetAtTime(e.pan, Math.max(now, time - 0.05), 0.1);
+        v.player.play(e.midi, holdS, time, e.velocity);
+      } catch (err) {
+        // A broken voice must not silence the instrument: drop it, the next note rebuilds it.
+        console.warn('Spectral Loom: voice failed, rebuilding', err);
+        this.receptorVoices.delete(e.receptorId);
+        this.disposeVoice(v);
+        continue;
+      }
       this.recent.push({ ...e, time, holdS });
     }
     const horizon = now - 8;
@@ -198,7 +254,7 @@ export class AudioEngine {
   }
 
   contextTime(): number {
-    return Tone.getContext().rawContext.currentTime;
+    return this.ctx ? this.ctx.rawContext.currentTime : 0;
   }
 
   /**
@@ -206,7 +262,8 @@ export class AudioEngine {
    * for this moment, so light and sound line up despite output latency.
    */
   heardTime(): number {
-    const raw = Tone.getContext().rawContext as AudioContext;
+    const raw = this.ctx?.rawContext as AudioContext | undefined;
+    if (!raw) return 0;
     const ts = typeof raw.getOutputTimestamp === 'function' ? raw.getOutputTimestamp() : null;
     if (ts && ts.contextTime !== undefined && ts.performanceTime !== undefined && ts.contextTime > 0) {
       return ts.contextTime + (performance.now() - ts.performanceTime) / 1000;
@@ -216,45 +273,71 @@ export class AudioEngine {
 
   dispose(): void {
     this.pause();
-    for (const v of this.receptorVoices.values()) {
-      v.synth.dispose();
-      v.filter.dispose();
-      v.panner.dispose();
-    }
+    for (const v of this.receptorVoices.values()) this.disposeVoice(v);
     this.receptorVoices.clear();
     for (const n of this.nodes) n.dispose();
     this.nodes = [];
-    this.voices = null;
+    this.buses = null;
   }
 }
 
-function createSynth(instrument: Instrument): Tone.PolySynth {
+function polyPlayer(synth: Tone.PolySynth): Player {
+  return {
+    play: (midi, holdS, time, velocity) => synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity),
+    release: (time) => synth.releaseAll(time),
+    output: synth,
+    dispose: () => synth.dispose(),
+  };
+}
+
+function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player {
+  if (instrument === 'drums') {
+    const kit = new DrumKit(context);
+    return {
+      play: (midi, _hold, time, velocity) => kit.hit(midi - DRUM_BASE_MIDI, time, velocity),
+      release: () => {},
+      output: kit.output,
+      dispose: () => kit.dispose(),
+    };
+  }
   if (instrument === 'pad') {
-    const pad = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'fatsawtooth', count: 3, spread: 22 },
-      envelope: { ...ENVELOPES.pad },
-    });
-    pad.maxPolyphony = 12;
-    return pad;
+    return polyPlayer(
+      new Tone.PolySynth({
+        context,
+        maxPolyphony: 16,
+        voice: Tone.Synth,
+        options: { oscillator: { type: 'fatsawtooth', count: 3, spread: 22 }, envelope: { ...ENVELOPES.pad } },
+      }),
+    );
   }
   if (instrument === 'pluck') {
-    const pluck = new Tone.PolySynth(Tone.MonoSynth, {
-      oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
-      envelope: { ...ENVELOPES.pluck },
-      filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
-      filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
-    });
-    pluck.maxPolyphony = 12;
-    return pluck;
+    return polyPlayer(
+      new Tone.PolySynth({
+        context,
+        maxPolyphony: 16,
+        voice: Tone.MonoSynth,
+        options: {
+          oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
+          envelope: { ...ENVELOPES.pluck },
+          filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
+          filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
+        },
+      }),
+    );
   }
-  const bell = new Tone.PolySynth(Tone.FMSynth, {
-    harmonicity: 3.01,
-    modulationIndex: 11,
-    oscillator: { type: 'sine' },
-    modulation: { type: 'sine' },
-    envelope: { ...ENVELOPES.bell },
-    modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
-  });
-  bell.maxPolyphony = 12;
-  return bell;
+  return polyPlayer(
+    new Tone.PolySynth({
+      context,
+      maxPolyphony: 16,
+      voice: Tone.FMSynth,
+      options: {
+        harmonicity: 3.01,
+        modulationIndex: 11,
+        oscillator: { type: 'sine' },
+        modulation: { type: 'sine' },
+        envelope: { ...ENVELOPES.bell },
+        modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
+      },
+    }),
+  );
 }

@@ -150,6 +150,90 @@ function gymnopedie(): SceneElement[] {
   ];
 }
 
+/* ------------------------------------------------------------- Afterglow */
+
+/*
+ * An original four-bar loop (Am–F–C–G, 100 BPM, sixteenth steps), played twice: the second
+ * time the bells come in. Four spectrometers in a diamond: drums, bass, chords, melody.
+ */
+const kit = (rows: Record<number, string>, bars: number): LoomNote[] =>
+  Array.from({ length: bars }, (_, b) =>
+    Object.entries(rows).flatMap(([deg, pattern]) =>
+      [...pattern].flatMap((ch, at) => (ch === 'x' ? [{ at: b * 16 + at, deg: Number(deg), len: 1 }] : [])),
+    ),
+  ).flat();
+
+const AG_GROOVE_A = { 0: 'x.......x.x.....', 3: '....x.......x...', 4: 'x.x.x.x.x.x.x.x.' };
+const AG_GROOVE_B = { 0: 'x.......x.x...x.', 2: '....x.......x...', 4: 'x.xxx.x.x.xxx.x.', 5: '..............x.' };
+const agDrums = [...kit(AG_GROOVE_A, 4), ...kit(AG_GROOVE_B, 4).map((n) => ({ ...n, at: n.at + 64 }))];
+const agBassBar = (a: string, b: string): string => `${a}:3 ${a}:3 ${b}:2 ${a}:3 ${a}:3 ${b}:2 |`;
+const AG_BASS = (agBassBar('A2', 'A2') + agBassBar('F2', 'F2') + agBassBar('C3', 'C3') + agBassBar('G2', 'B2')).repeat(2);
+const AG_CHORDS = '[A3 C4 E4]:16 | [F3 A3 C4]:16 | [G3 C4 E4]:16 | [G3 B3 D4]:16 |'.repeat(2);
+const AG_MELODY =
+  '-:64 | E5:4 D5:2 C5:2 -:2 A4:4 -:2 | C5:4 A4:2 G4:2 -:2 A4:6 | G4:2 A4:2 C5:4 D5:2 E5:6 | D5:6 C5:2 B4:4 -:4 |';
+
+function afterglow(): SceneElement[] {
+  return [
+    ...chain({
+      id: 'ag-drums',
+      origin: { x: 2, y: 12 },
+      heading: 0,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/16', title: 'Afterglow — drums', steps: 128, notes: agDrums },
+      receptor: { at: 12, aperture: 7, instrument: 'drums', octave: 3, span: 1, voices: 4, gain: 0.9 },
+    }),
+    ...chain({
+      id: 'ag-bass',
+      origin: { x: 2, y: 26 },
+      heading: 0,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/16', title: 'Afterglow — bass', ...card('major', 0, 2, AG_BASS) },
+      receptor: { at: 12, aperture: 7, instrument: 'pluck', octave: 2, span: 2, voices: 1, gain: 0.95 },
+    }),
+    ...chain({
+      id: 'ag-chords',
+      origin: { x: 46, y: 2 },
+      heading: 180,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/16', title: 'Afterglow — chords', ...card('major', 0, 3, AG_CHORDS) },
+      receptor: { at: 12, tilt: 12, aperture: 7, instrument: 'pad', octave: 3, span: 2, voices: 3, gain: 0.6 },
+    }),
+    ...chain({
+      id: 'ag-melody',
+      origin: { x: 46, y: 16 },
+      heading: 180,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/16', title: 'Afterglow — bells', ...card('major', 0, 4, AG_MELODY) },
+      receptor: { at: 12, aperture: 7, instrument: 'bell', octave: 4, span: 2, voices: 2, gain: 0.8 },
+    }),
+  ];
+}
+
+/* ------------------------------------------------------------- Euclid kit */
+
+function euclidKit(): SceneElement[] {
+  // Three coloured beams, each re-timed by its own Euclidean ring, land on one drum
+  // receptor. On a drum receptor colour picks the drum: red kick, green snare, blue hat.
+  const beams: [string, number, number, Partial<ElementOf<'modulator'>>][] = [
+    ['kick', 9, 665, { steps: 16, hits: 4, rotate: 0, subdivision: '1/16', depth: 0.9 }],
+    ['snare', 14, 530, { steps: 8, hits: 2, rotate: 2, subdivision: '1/8', depth: 0.9 }],
+    ['hat', 19, 455, { steps: 16, hits: 11, rotate: 1, subdivision: '1/16', depth: 0.7 }],
+  ];
+  const out: SceneElement[] = [];
+  for (const [name, y, nm, mod] of beams) {
+    out.push(el('emitter', `ek-${name}`, 3, y, 0, { pulse: 'drone', spectrum: { kind: 'band', minNm: nm - 12, maxNm: nm + 12 } }));
+    out.push(el('modulator', `ek-${name}-mod`, 10, y, 0, mod));
+  }
+  out.push(el('receptor', 'ek-kit', 30, 14, 180, { aperture: 13, instrument: 'drums', octave: 3, span: 1, voices: 3, gain: 0.95 }));
+  // A white drone split into a soft chord for colour behind the groove.
+  out.push(
+    ...chain({
+      id: 'ek-pad',
+      origin: { x: 3, y: 26.5 },
+      heading: 0,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/4', title: 'Euclid kit — pad', ...card('minorPent', 9, 2, '[A2 E3 A3]:8 | [C3 G3 C4]:8 |') },
+      receptor: { at: 12, tilt: 18, aperture: 7, instrument: 'pad', octave: 2, span: 2, voices: 3, gain: 0.45 },
+    }),
+  );
+  return out;
+}
+
 export interface DemoScene {
   id: string;
   title: string;
@@ -206,6 +290,13 @@ const preludeArp = card('major', 0, 3, PRELUDE);
 const preludeBass = card('major', 0, 1, PRELUDE_BASS);
 
 export const DEMO_SCENES: DemoScene[] = [
+  {
+    id: 'afterglow',
+    title: 'Afterglow',
+    subtitle: 'original · with drums',
+    blurb: 'Four spectrometers in a diamond: a drum kit (colour picks the drum), bass, chords, and bells that join on the second pass. Select a loom card to rewrite any part.',
+    scene: scene('Afterglow', afterglow(), { bpm: 100, scale: 'major', root: 0, quantize: 1, raysPerSplit: 28 }),
+  },
   {
     id: 'gymnopedie',
     title: 'Gymnopédie No. 1',
@@ -354,6 +445,13 @@ export const DEMO_SCENES: DemoScene[] = [
       ],
       { bpm: 108, scale: 'dorian', root: 2, quantize: 0.6 },
     ),
+  },
+  {
+    id: 'euclid',
+    title: 'Euclid kit',
+    subtitle: 'generative · drums',
+    blurb: 'Red, green and blue beams, each re-timed by a Euclidean ring (4 in 16, 2 in 8, 11 in 16), hit one drum receptor: red is the kick, green the snare, blue the hats. Change a ring’s hits to change the groove.',
+    scene: scene('Euclid kit', euclidKit(), { bpm: 96, scale: 'minorPent', root: 9, quantize: 1 }),
   },
   {
     id: 'bench',

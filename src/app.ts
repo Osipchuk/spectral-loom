@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { AudioEngine } from './audio/engine';
 import { renderWav } from './audio/export';
 import { ENVELOPES, envelopeAt } from './audio/instruments';
-import { degreeToMidi, lightToDegree } from './music/pitch';
+import { degreeCount, degreeToMidi, lightToDegree, receptorPitch } from './music/pitch';
 import { lightToRGB } from './render/spectral-color';
-import { NoteLabels, type NoteLabel } from './ui/note-labels';
+import { midiName, NoteLabels, type NoteLabel } from './ui/note-labels';
+import { DRUM_BASE_MIDI, DRUM_PIECES } from './audio/drums';
 import { CALM_NIGHT, moodWeather, weatherName, type Weather } from './music/mood';
 import { AUDIO_THRESHOLD } from './timing/arrivals';
 import { trace } from './optics/tracer';
@@ -27,6 +28,8 @@ import { Interaction } from './ui/interaction';
 import { Panels } from './ui/panels';
 import { Transport } from './ui/transport';
 import { Tutorial } from './ui/tutorial';
+import { LoomEditor, type LoomRows } from './ui/loom-editor';
+import { degreeToWavelength } from './music/pitch';
 import { emptyScene } from './scene/defaults';
 import type { ElementKind } from './scene/types';
 
@@ -85,6 +88,14 @@ export class App {
   private previewClock: BeatClock;
 
   private tutorial: Tutorial | null = null;
+  private loomEditor: LoomEditor;
+  /** Per loom card: the pitches (or drums) its light can reach, for the editor. */
+  private cardRows = new Map<string, LoomRows>();
+  private soundChip!: HTMLButtonElement;
+
+  private onAnyPointer = (): void => {
+    if (this.engine.ready && this.engine.playing) void this.engine.resume();
+  };
 
   constructor(host: HTMLElement, opts: AppOptions) {
     const scene = opts.scene ?? starterScene();
@@ -138,10 +149,17 @@ export class App {
       html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>space</kbd> play',
     });
     this.overlay = opts.scene ? this.buildOverlay() : this.buildWelcome();
-    this.root.append(this.noteLabels.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
+    this.loomEditor = new LoomEditor(this.store, (id) => this.rowsForCard(id));
+    this.root.append(this.noteLabels.el, this.loomEditor.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
     this.root.addEventListener('keydown', this.onKey);
+    // Browsers suspend audio (device change, sleep, autoplay rules): say so, resume on the next click.
+    this.soundChip = h('button.sl-chip', { type: 'button', hidden: true, text: 'Sound paused by the browser — click to resume' });
+    this.soundChip.addEventListener('click', () => void this.engine.resume());
+    this.root.append(this.soundChip);
+    this.engine.onStatus = (status) => (this.soundChip.hidden = status === 'running');
+    this.root.addEventListener('pointerdown', this.onAnyPointer, true);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.root);
@@ -237,12 +255,16 @@ export class App {
         void this.start();
       },
       finish: () => {
+        if (this.tutorial) this.resizeObserver.unobserve(this.tutorial.el);
         this.tutorial = null;
         this.interaction.onClickPlace = null;
+        this.resize();
       },
     });
     this.interaction.onClickPlace = () => this.tutorial?.snapNow();
     this.root.append(this.tutorial.el);
+    this.resizeObserver.observe(this.tutorial.el);
+    this.resize();
   }
 
   private highlightPalette(kind: ElementKind | null): void {
@@ -286,6 +308,13 @@ export class App {
       if (s.bpm !== this.previewClock.bpm) this.previewClock.setBpm(s.bpm, performance.now() / 1000);
       this.engine.setMasterDb(s.masterDb);
     }
+    if (kinds.has('selection') || kinds.has('load')) {
+      const sel = this.store.selected;
+      const was = this.loomEditor.openId;
+      if (sel?.kind === 'loom') this.loomEditor.open(sel.id);
+      else this.loomEditor.close();
+      if (was !== this.loomEditor.openId) this.resize();
+    }
     if (kinds.has('selection') || kinds.has('load') || kinds.has('toggle')) {
       this.panels.refresh(kinds.has('load') || kinds.has('toggle'));
     } else if (kinds.has('geometry')) {
@@ -298,11 +327,13 @@ export class App {
     this.renderer.resize(Math.max(1, Math.round(r.width)), Math.max(1, Math.round(r.height)));
     const pal = this.panels.palette.getBoundingClientRect();
     const side = this.panels.side.getBoundingClientRect();
+    // The tutorial card sits at the bottom: frame the table above it so it never covers glass.
+    const coach = this.tutorial?.el.getBoundingClientRect() ?? (this.loomEditor.openId ? this.loomEditor.el.getBoundingClientRect() : undefined);
     this.renderer.setInsets({
       left: Math.max(0, pal.right - r.left - 10),
       right: Math.max(0, r.right - side.left - 10),
       top: 60,
-      bottom: 24,
+      bottom: coach && coach.height > 0 ? Math.max(24, r.bottom - coach.top + 8) : 24,
     });
   }
 
@@ -319,6 +350,7 @@ export class App {
     this.sources = pulseSources(scene);
     this.engine.setPlan(this.plan, this.sources);
     this.cardLayout = this.computeCardLayout(this.tree);
+    if (this.loomEditor.openId) this.loomEditor.refresh();
     this.visual = layoutVisuals(scene, this.tree, this.plan, scene.settings.bpm);
     if (this.pulseTexture.ensureRows(this.visual.channels.length)) {
       this.renderer.beams.shared.uPulses!.value = this.pulseTexture.texture;
@@ -340,8 +372,9 @@ export class App {
     for (const hit of tree.receptorHits) {
       const r = this.store.get(hit.receptorId);
       if (r?.kind !== 'receptor' || !r.enabled || hit.bounces > 0 || hit.intensity < AUDIO_THRESHOLD) continue;
-      const deg = lightToDegree(hit.light, { scale: scene.settings.scale, span: r.span });
-      const midi = degreeToMidi(deg, { scale: scene.settings.scale, root: scene.settings.root, octave: r.octave, span: r.span });
+      const pc = receptorPitch(scene.settings, r);
+      const deg = lightToDegree(hit.light, pc);
+      const midi = degreeToMidi(deg, pc);
       const seg = tree.segments[hit.segmentId]!;
       const key = `${r.id}|${midi}`;
       const a = acc.get(key);
@@ -351,14 +384,32 @@ export class App {
         a.n += 1;
       } else {
         const back = fromAngle(r.rotation + Math.PI);
-        acc.set(key, { label: { receptorId: r.id, midi, at: { ...seg.end }, back, rgb: lightToRGB(hit.light) }, n: 1, u: hit.u });
+        const text = r.instrument === 'drums' ? (DRUM_PIECES[midi - DRUM_BASE_MIDI] ?? '') : midiName(midi);
+        acc.set(key, { label: { receptorId: r.id, midi, text, at: { ...seg.end }, back, rgb: lightToRGB(hit.light) }, n: 1, u: hit.u });
       }
     }
     return [...acc.values()].sort((a, b) => (a.label.receptorId === b.label.receptorId ? a.u - b.u : a.label.receptorId < b.label.receptorId ? -1 : 1)).map((a) => a.label);
   }
 
+  /** Rows for the loom editor: what this card's light can play, labelled and coloured. */
+  private rowsForCard(id: string): LoomRows {
+    const known = this.cardRows.get(id);
+    if (known && known.rows.length > 0) return known;
+    // Not connected yet: offer one octave of the table's scale from a mid register.
+    const s = this.store.scene.settings;
+    const pc = { scale: s.scale, root: s.root, octave: 4, span: 1 };
+    const count = degreeCount(pc);
+    const rows = Array.from({ length: count + 1 }, (_, deg) => ({
+      deg,
+      label: midiName(degreeToMidi(deg, pc)),
+      rgb: lightToRGB({ kind: 'mono', nm: degreeToWavelength(Math.min(deg, count - 1), pc) }),
+    }));
+    return { rows, kit: false, connected: false };
+  }
+
   private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
     const out = new Map<string, Map<number, number>>();
+    this.cardRows = new Map();
     const scene = this.store.scene;
     const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom').map((l) => [l.id, l]));
     for (const hit of tree.receptorHits) {
@@ -373,7 +424,16 @@ export class App {
       if (!seg) continue;
       const tangent = perp(fromAngle(loom.rotation));
       const u = dot(sub(seg.end, loom.pos), tangent) / loom.length;
-      const deg = lightToDegree(hit.light, { scale: scene.settings.scale, span: receptor.span });
+      const pc = receptorPitch(scene.settings, receptor);
+      const deg = lightToDegree(hit.light, pc);
+      const rows = this.cardRows.get(loom.id) ?? { rows: [], kit: pc.kit === true, connected: true };
+      if (!rows.rows.some((r) => r.deg === deg)) {
+        const midi = degreeToMidi(deg, pc);
+        const label = pc.kit ? (DRUM_PIECES[midi - DRUM_BASE_MIDI] ?? '') : midiName(midi);
+        rows.rows.push({ deg, label, rgb: lightToRGB(hit.light) });
+        rows.rows.sort((a, b) => a.deg - b.deg);
+      }
+      this.cardRows.set(loom.id, rows);
       const map = out.get(loom.id) ?? new Map<number, number>();
       // Several rays can share a degree; keep their average position.
       const prev = map.get(deg);
@@ -404,6 +464,7 @@ export class App {
     this.updateLight(heard, live ? (this.engine.playing ? this.engine.clock : null) : this.previewClock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
+    this.loomEditor.setBeat(beat);
     this.updateMood(heard, wall);
 
     const sel = this.store.selected ?? null;
@@ -557,6 +618,7 @@ export class App {
     this.intersectionObserver.disconnect();
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.root.removeEventListener('keydown', this.onKey);
+    this.root.removeEventListener('pointerdown', this.onAnyPointer, true);
     this.interaction.dispose();
     this.engine.dispose();
     this.pulseTexture.dispose();

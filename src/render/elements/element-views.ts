@@ -11,6 +11,7 @@ export const INSTRUMENT_COLORS: Record<string, RGB> = {
   pad: [0.55, 0.42, 1.0],
   pluck: [1.0, 0.62, 0.28],
   bell: [0.35, 0.9, 1.0],
+  drums: [1.0, 0.38, 0.42],
 };
 
 /**
