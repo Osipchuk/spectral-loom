@@ -183,6 +183,10 @@ describe('interference comb', () => {
     expect(after.length).toBeLessThan(24);
     expect(after.every((g) => g.thin && g.width <= 0.06)).toBe(true);
     expect(after.every((g) => g.audible)).toBe(true);
+    // The rest of the rainbow carries on faintly behind the comb, but never sounds.
+    const faint = tree.segments.filter((g) => g.pathKey.endsWith('c-'));
+    expect(faint.length).toBeGreaterThan(0);
+    expect(faint.every((g) => !g.audible)).toBe(true);
   });
 
   it('splits white light into one thin colour per fringe, like a grating', () => {

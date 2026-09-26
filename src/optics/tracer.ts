@@ -13,6 +13,8 @@ import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit,
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
 
 export const EMITTER_BEAM_WIDTH = 0.26;
+/** Light between an interference comb's fringes: visible, but below the audio threshold. */
+export const COMB_LEAK = 0.08;
 
 interface RayState {
   o: Vec2;
@@ -203,7 +205,11 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
         pathKey: `${ray.pathKey}|${c.elementId}:${c.face}${tag}`,
         ...over,
       };
-      if (next.intensity < opts.minIntensity) return;
+      // Faint light behind an interference comb is judged by its whole fan's power (one of
+      // 24 rays is weak on its own); everything else by its own intensity, which prunes
+      // the many faint Fresnel reflections of fan rays.
+      const power = tag === 'c-' && next.group ? next.intensity * next.group.count : next.intensity;
+      if (power < opts.minIntensity) return;
       if (next.depth > opts.maxDepth) {
         seg.endEvent = { kind: 'cutoff' };
         return;
@@ -342,7 +348,9 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
         if (ray.light.kind === 'mono') {
           const gain = combTransmission(ray.light.nm, el.fringes, el.phase);
           if (gain < 0.04) {
-            seg.endEvent = { kind: 'absorbed', elementId: c.elementId };
+            // Between fringes a real grating is dark but not black: the rainbow carries on
+            // faintly behind the comb — too dim to sound, bright enough to see.
+            child({ d: ray.d, intensity: ray.intensity * COMB_LEAK, ignoreId: c.elementId }, 'c-');
             break;
           }
           // Keep the fan's power per note: a thin line carries what its slice of the fan did.
