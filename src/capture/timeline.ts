@@ -1,5 +1,6 @@
 import { card, chainPoints, el } from '../scene/demos';
 import { DEFAULT_SETTINGS, DEFAULT_TABLE } from '../scene/defaults';
+import type { Weather } from '../music/mood';
 import type { SceneModel } from '../scene/types';
 
 /**
@@ -12,6 +13,8 @@ export interface Timeline {
   at(t: number): SceneModel;
   /** Camera for time t: zoom factor, pan (world units) and orbit angles. */
   camera(t: number): { zoom: number; panX: number; panZ: number; azimuth: number; polar: number };
+  /** Scripted sky, so every frame can be rendered independently. */
+  weather(t: number): Weather;
 }
 
 const smooth = (a: number, b: number, t: number): number => {
@@ -61,6 +64,20 @@ export const LIGHT_CHANGES_MUSIC: Timeline = {
       table: { ...DEFAULT_TABLE },
       settings: { ...DEFAULT_SETTINGS, bpm: 100, scale: 'majorPent', root: 0, quantize: 1 },
       elements,
+    };
+  },
+  weather(t) {
+    const melody = smooth(14, 17, t);
+    const beat = smooth(19, 21, t);
+    return {
+      aurora: 0.1 + 0.5 * melody + 0.4 * beat,
+      rain: 0,
+      snow: 0,
+      mist: 0.45 - 0.3 * beat,
+      clouds: 0.1,
+      wind: 0.12 + 0.55 * beat,
+      fireflies: 0.8 - 0.5 * beat,
+      warmth: 0.55 + 0.2 * melody,
     };
   },
   camera(t) {

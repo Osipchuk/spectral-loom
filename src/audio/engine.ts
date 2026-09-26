@@ -289,13 +289,52 @@ export class AudioEngine {
   }
 }
 
-function polyPlayer(synth: Tone.PolySynth): Player {
-  return {
-    play: (midi, holdS, time, velocity) => synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity),
-    release: (time) => synth.releaseAll(time),
-    output: synth,
-    dispose: () => synth.dispose(),
-  };
+/**
+ * Our own voice allocation. Tone's PolySynth frees a voice when its envelope reports
+ * silence, which misfires when notes are scheduled ahead of time: voices leak until every
+ * note is "Max polyphony exceeded. Note dropped." — the instrument goes quiet until reload.
+ * Here each voice is busy until a time we compute ourselves; when all are busy, the one
+ * that frees up soonest is stolen. A note is never dropped.
+ */
+/** The monophonic synths a pool is built from. */
+type MonoVoice = Tone.Synth | Tone.MonoSynth | Tone.FMSynth;
+
+class VoicePool implements Player {
+  readonly output: Tone.Gain;
+  private voices: { synth: MonoVoice; busyUntil: number }[] = [];
+
+  constructor(
+    context: Tone.BaseContext,
+    size: number,
+    make: () => MonoVoice,
+    private releaseS: number,
+  ) {
+    this.output = new Tone.Gain({ gain: 1, context });
+    for (let i = 0; i < size; i++) {
+      const synth = make();
+      synth.connect(this.output);
+      this.voices.push({ synth, busyUntil: 0 });
+    }
+  }
+
+  play(midi: number, holdS: number, time: number, velocity: number): void {
+    const free = this.voices.find((v) => v.busyUntil <= time);
+    const v = free ?? this.voices.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b));
+    v.synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity);
+    v.busyUntil = time + holdS + this.releaseS + 0.05;
+  }
+
+  release(time: number): void {
+    for (const v of this.voices) {
+      if (v.busyUntil > time) v.synth.triggerRelease(time);
+      v.busyUntil = Math.min(v.busyUntil, time + this.releaseS);
+    }
+  }
+
+  dispose(): void {
+    for (const v of this.voices) v.synth.dispose();
+    this.output.dispose();
+  }
 }
 
 function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player {
@@ -308,44 +347,43 @@ function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player
       dispose: () => kit.dispose(),
     };
   }
+  const env = ENVELOPES[instrument];
   if (instrument === 'pad') {
-    return polyPlayer(
-      new Tone.PolySynth({
-        context,
-        maxPolyphony: 16,
-        voice: Tone.Synth,
-        options: { oscillator: { type: 'fatsawtooth', count: 3, spread: 22 }, envelope: { ...ENVELOPES.pad } },
-      }),
+    return new VoicePool(
+      context,
+      10,
+      () => new Tone.Synth({ context, oscillator: { type: 'fatsawtooth', count: 3, spread: 22 }, envelope: { ...env } }),
+      env.release,
     );
   }
   if (instrument === 'pluck') {
-    return polyPlayer(
-      new Tone.PolySynth({
-        context,
-        maxPolyphony: 16,
-        voice: Tone.MonoSynth,
-        options: {
+    return new VoicePool(
+      context,
+      12,
+      () =>
+        new Tone.MonoSynth({
+          context,
           oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
-          envelope: { ...ENVELOPES.pluck },
+          envelope: { ...env },
           filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
           filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
-        },
-      }),
+        }),
+      env.release,
     );
   }
-  return polyPlayer(
-    new Tone.PolySynth({
-      context,
-      maxPolyphony: 16,
-      voice: Tone.FMSynth,
-      options: {
+  return new VoicePool(
+    context,
+    12,
+    () =>
+      new Tone.FMSynth({
+        context,
         harmonicity: 3.01,
         modulationIndex: 11,
         oscillator: { type: 'sine' },
         modulation: { type: 'sine' },
-        envelope: { ...ENVELOPES.bell },
+        envelope: { ...env },
         modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
-      },
-    }),
+      }),
+    env.release,
   );
 }

@@ -4,6 +4,7 @@ import type { Loom, LoomNote, Subdivision } from '../scene/types';
 import { SUBDIVISION_BEATS } from '../timing/sources';
 import { readableRGB } from '../render/spectral-color';
 import { h } from './dom';
+import { helpIcon } from './panels';
 
 /** One playable row of the card: a pitch (or drum) that reaches a receptor through it. */
 export interface LoomRow {
@@ -93,7 +94,20 @@ export class LoomEditor {
     this.el = h(
       'section.sl-panel.sl-loom-editor',
       { 'aria-label': 'Loom card editor', hidden: true },
-      h('header.sl-le-head', {}, this.title, this.stepsSel, this.subSel, this.presetSel, compose, clear, close),
+      h(
+        'header.sl-le-head',
+        {},
+        this.title,
+        helpIcon(
+          'This is the punched card. Columns are steps in time; rows are the colours (notes) whose light reaches a receptor through the card. A hole lets a swell through on that colour at that step, so that note plays. Steps and step length set how long the pattern is.',
+        ),
+        this.stepsSel,
+        this.subSel,
+        this.presetSel,
+        compose,
+        clear,
+        close,
+      ),
       this.scroller,
       this.hint,
     );

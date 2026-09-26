@@ -142,12 +142,9 @@ export class App {
     );
     this.transport.setScene(this.demoId);
 
-    const title = h(
-      'header.sl-title',
-      {},
-      h('span.sl-title-name', { text: 'Spectral Loom' }),
-      h('span.sl-title-sub', { text: 'an optical instrument' }),
-    );
+    const home = h('button.sl-title-name', { type: 'button', text: 'Spectral Loom', title: 'Back to the start screen' });
+    home.addEventListener('click', () => this.goHome());
+    const title = h('header.sl-title', {}, home, h('span.sl-title-sub', { text: 'an optical instrument' }));
     const hint = h('footer.sl-keys', {
       html: '<kbd>drag</kbd> move <kbd>wheel</kbd>/<kbd>Q</kbd><kbd>E</kbd> rotate <kbd>⇧</kbd> free <kbd>dbl-click</kbd> on/off <kbd>Del</kbd> remove <kbd>drag table</kbd> tilt <kbd>wheel</kbd>/<kbd>pinch</kbd> zoom <kbd>right-drag</kbd> pan <kbd>space</kbd> play',
     });
@@ -161,6 +158,27 @@ export class App {
     this.soundChip = h('button.sl-chip', { type: 'button', hidden: true, text: 'Sound paused by the browser — click to resume' });
     this.soundChip.addEventListener('click', () => void this.engine.resume());
     this.root.append(this.soundChip);
+    // One floating tooltip for every "?": panels scroll, so tips inside them would be clipped.
+    const tip = h('div.sl-float-tip', { hidden: true, role: 'tooltip' });
+    this.root.append(tip);
+    const showTip = (e: Event): void => {
+      const help = (e.target as HTMLElement).closest?.('.sl-help');
+      if (!help) return;
+      const r = help.getBoundingClientRect();
+      const root = this.root.getBoundingClientRect();
+      tip.textContent = help.querySelector('.sl-help-tip')?.textContent ?? '';
+      tip.hidden = false;
+      const left = r.left - root.left - 240 > 8 ? r.left - root.left - 240 : r.right - root.left + 10;
+      tip.style.left = `${left}px`;
+      tip.style.top = `${Math.min(root.height - 120, Math.max(8, r.top - root.top - 8))}px`;
+    };
+    const hideTip = (e: Event): void => {
+      if ((e.target as HTMLElement).closest?.('.sl-help')) tip.hidden = true;
+    };
+    this.root.addEventListener('pointerover', showTip);
+    this.root.addEventListener('focusin', showTip);
+    this.root.addEventListener('pointerout', hideTip);
+    this.root.addEventListener('focusout', hideTip);
     const zoomBtn = (text: string, label: string, fn: () => void): HTMLButtonElement => {
       const b = h('button.sl-zbtn', { type: 'button', text, 'aria-label': label, title: label });
       b.addEventListener('click', fn);
@@ -246,6 +264,17 @@ export class App {
     );
   }
 
+  /** Back to the start screen: stop, clear the table, show the welcome card. */
+  goHome(): void {
+    this.engine.pause();
+    this.transport.setPlaying(false);
+    this.tutorial?.close();
+    this.loadScene(starterScene());
+    this.overlay?.remove();
+    this.overlay = this.buildWelcome();
+    this.root.append(this.overlay);
+  }
+
   private dismissOverlay(): void {
     const o = this.overlay;
     this.overlay = null;
@@ -266,6 +295,7 @@ export class App {
       ensureAudio: () => {
         if (!this.engine.playing) void this.start();
       },
+      relayout: () => this.resize(),
       openDemo: (id) => {
         this.tutorial?.close();
         this.loadDemo(id);
@@ -332,6 +362,7 @@ export class App {
       const was = this.loomEditor.openId;
       if (sel?.kind === 'loom') this.loomEditor.open(sel.id);
       else this.loomEditor.close();
+      this.tutorial?.setDockTop(!!this.loomEditor.openId);
       if (was !== this.loomEditor.openId) this.resize();
     }
     if (kinds.has('selection') || kinds.has('load') || kinds.has('toggle')) {
@@ -346,15 +377,19 @@ export class App {
     this.renderer.resize(Math.max(1, Math.round(r.width)), Math.max(1, Math.round(r.height)));
     const pal = this.panels.palette.getBoundingClientRect();
     const side = this.panels.side.getBoundingClientRect();
-    // The tutorial card sits at the bottom: frame the table above it so it never covers glass.
-    const coach = this.tutorial?.el.getBoundingClientRect() ?? (this.loomEditor.openId ? this.loomEditor.el.getBoundingClientRect() : undefined);
+    // Bottom: the loom editor if open, else the tutorial card. Top: the tutorial card when
+    // it is docked up there (while the editor is open). The table is framed in between.
+    const coach = this.tutorial?.el.getBoundingClientRect();
+    const editor = this.loomEditor.openId ? this.loomEditor.el.getBoundingClientRect() : undefined;
+    const coachTop = !!this.tutorial?.el.classList.contains('sl-coach-top');
+    const bottomBox = editor ?? (coach && !coachTop ? coach : undefined);
     // Hidden panels (film mode, small screens) report empty rects: they take no room.
-    const shown = (b: DOMRect): boolean => b.width > 0 && b.height > 0;
+    const shown = (b?: DOMRect): b is DOMRect => !!b && b.width > 0 && b.height > 0;
     this.renderer.setInsets({
       left: shown(pal) ? Math.max(0, pal.right - r.left - 10) : 0,
       right: shown(side) ? Math.max(0, r.right - side.left - 10) : 0,
-      top: this.capture ? 0 : 60,
-      bottom: coach && coach.height > 0 ? Math.max(24, r.bottom - coach.top + 8) : 24,
+      top: this.capture ? 0 : coachTop && shown(coach) ? Math.max(60, coach.bottom - r.top + 8) : 60,
+      bottom: shown(bottomBox) ? Math.max(24, r.bottom - bottomBox.top + 8) : 24,
     });
   }
 
@@ -551,6 +586,7 @@ export class App {
       this.dirty.crossfade = toggled;
     }
     Object.assign(this.renderer.angles, tl.camera(t));
+    this.renderer.atmosphere.setWeather(tl.weather(t), true);
     this.renderer.updateCamera();
     this.renderAt(t, this.captureClock);
   }
@@ -624,7 +660,7 @@ export class App {
 
   /** Let the sky follow the music: re-estimate the mood twice a second. */
   private updateMood(heard: number, wall: number): void {
-    if (wall - this.lastMood < 0.5) return;
+    if (this.capture || wall - this.lastMood < 0.5) return;
     this.lastMood = wall;
     const windowS = 6;
     const notes = this.engine.playing || this.captureClock ? this.visibleNotes(heard).filter((n) => n.time <= heard && n.time > heard - windowS) : [];

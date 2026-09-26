@@ -54,6 +54,21 @@ export class Materials {
     envMapIntensity: 0.9,
   });
 
+  /** Grating glass: thin-film iridescence gives the rainbow sheen of a real grating. */
+  readonly comb = new THREE.MeshPhysicalMaterial({
+    color: 0xd8e2ff,
+    metalness: 0.3,
+    roughness: 0.12,
+    transmission: 0.6,
+    thickness: 0.05,
+    ior: 1.5,
+    iridescence: 1,
+    iridescenceIOR: 1.45,
+    iridescenceThicknessRange: [250, 900],
+    envMapIntensity: 2.2,
+    depthWrite: false,
+  });
+
   readonly velvet = new THREE.MeshStandardMaterial({ color: 0x060608, roughness: 1, metalness: 0 });
 
   readonly ghost = new THREE.MeshBasicMaterial({
@@ -105,7 +120,7 @@ export class Materials {
   }
 
   dispose(): void {
-    for (const m of [this.glass, this.chrome, this.splitter, this.anodized, this.brass, this.velvet, this.ghost, this.pick]) m.dispose();
+    for (const m of [this.glass, this.chrome, this.splitter, this.comb, this.anodized, this.brass, this.velvet, this.ghost, this.pick]) m.dispose();
     for (const m of this.tinted.values()) m.dispose();
     this.tinted.clear();
   }

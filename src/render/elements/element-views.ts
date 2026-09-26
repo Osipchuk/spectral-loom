@@ -161,6 +161,29 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       break;
     }
 
+    case 'comb': {
+      const pane = mesh(new RoundedBoxGeometry(0.06, 0.95, el.length, 2, 0.02), m(mats.comb));
+      pane.position.y = 0.55;
+      group.add(pane);
+      // Fine rulings: a few dark lines across the glass.
+      const rulings = new THREE.Group();
+      const n = Math.max(4, el.fringes * 2);
+      for (let i = 0; i < n; i++) {
+        const line = mesh(new THREE.BoxGeometry(0.075, 0.9, 0.012), m(mats.anodized), false);
+        line.position.set(0, 0.55, -el.length / 2 + ((i + 0.5) * el.length) / n);
+        rulings.add(line);
+      }
+      group.add(rulings);
+      const frame = mesh(new RoundedBoxGeometry(0.16, 0.08, el.length + 0.2, 2, 0.02), m(mats.anodized));
+      frame.position.y = 0.04;
+      const top = frame.clone();
+      top.position.y = 1.06;
+      group.add(frame, top);
+      pickSize = [0.7, el.length];
+      radius = el.length / 2 + 0.5;
+      break;
+    }
+
     case 'blocker': {
       const block = mesh(new RoundedBoxGeometry(0.35, 0.95, el.length, 3, 0.06), m(mats.velvet));
       block.position.y = 0.475;

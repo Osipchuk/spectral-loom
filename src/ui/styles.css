@@ -70,6 +70,22 @@
   align-items: baseline;
   gap: 10px;
   pointer-events: none;
+}
+.sl-root .sl-title button.sl-title-name {
+  all: unset;
+  pointer-events: auto;
+  cursor: pointer;
+  font: italic 400 22px/1 var(--sl-serif);
+  color: #f2f0ea;
+  transition: color 0.15s;
+}
+.sl-root .sl-title button.sl-title-name:hover {
+  color: #ffffff;
+  text-shadow: 0 0 18px rgba(190, 210, 255, 0.6);
+}
+.sl-root .sl-title button.sl-title-name:focus-visible {
+  outline: 1px solid var(--sl-accent);
+  outline-offset: 3px;
   text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
 }
 .sl-root .sl-title-name {
@@ -204,6 +220,46 @@
   color: var(--sl-fg-faint);
 }
 
+.sl-root .sl-help {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--sl-line-strong);
+  color: var(--sl-fg-faint);
+  font: 600 8.5px/1 var(--sl-sans);
+  cursor: help;
+  vertical-align: 1px;
+}
+.sl-root .sl-help:hover,
+.sl-root .sl-help:focus-visible {
+  color: var(--sl-fg);
+  border-color: var(--sl-accent);
+  outline: none;
+}
+.sl-root .sl-help-tip {
+  display: none;
+}
+.sl-root .sl-float-tip {
+  position: absolute;
+  width: 230px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: rgba(12, 13, 18, 0.97);
+  border: 1px solid var(--sl-line-strong);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  color: var(--sl-fg-dim);
+  font: 400 11.5px/1.45 var(--sl-sans);
+  pointer-events: none;
+  z-index: 30;
+}
+.sl-root .sl-float-tip[hidden] {
+  display: none;
+}
+
 /* ---------- note labels ---------- */
 .sl-root .sl-notes {
   position: absolute;
@@ -244,6 +300,7 @@
 .sl-root .sl-globals {
   padding: 12px 14px 14px;
   overflow-y: auto;
+  overflow-x: visible;
   scrollbar-width: thin;
 }
 .sl-root .sl-inspector {
@@ -725,6 +782,16 @@
   padding: 12px 16px;
   z-index: 6;
   border-color: rgba(190, 210, 255, 0.22);
+}
+.sl-root .sl-coach.sl-coach-top {
+  top: 64px;
+  bottom: auto;
+}
+.sl-root .sl-coach.sl-coach-done {
+  border-color: rgba(159, 240, 184, 0.35);
+}
+.sl-root .sl-coach.sl-coach-done .sl-coach-title {
+  color: #c9f5d6;
 }
 .sl-root .sl-coach-count {
   font: 400 10px/1 var(--sl-mono);

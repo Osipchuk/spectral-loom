@@ -103,12 +103,25 @@ export interface Loom extends BaseElement {
   title: string;
 }
 
+/**
+ * An interference comb: passes light only on evenly spaced fringes in pitch space and
+ * narrows it to thin lines. A smeared rainbow becomes a few clean, separate colours.
+ */
+export interface Comb extends BaseElement {
+  kind: 'comb';
+  length: number;
+  /** Number of bright fringes across the visible spectrum. */
+  fringes: number;
+  /** Shifts the fringes, 0…1 of one fringe spacing. */
+  phase: number;
+}
+
 export interface Blocker extends BaseElement {
   kind: 'blocker';
   length: number;
 }
 
-export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker | Loom;
+export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator | Receptor | Blocker | Loom | Comb;
 export type ElementKind = SceneElement['kind'];
 export type ElementOf<K extends ElementKind> = Extract<SceneElement, { kind: K }>;
 

@@ -168,3 +168,29 @@ describe('tracer', () => {
     expect(dot(tree.segments[1]!.dir, fromAngle(0))).toBeCloseTo(1, 9);
   });
 });
+
+describe('interference comb', () => {
+  it('turns a dispersed fan into a few thin lines on its fringes', () => {
+    const s = emptyScene();
+    s.settings.dispersion = 12;
+    s.elements.push(makeElement('emitter', { x: 3, y: 14 }, 0));
+    s.elements.push(makeElement('prism', { x: 12, y: 14 }, (70 * Math.PI) / 180, { size: 4 }));
+    // Across the fan, a few units after the prism.
+    s.elements.push(makeElement('comb', { x: 16.9, y: 9.7 }, (-39.6 * Math.PI) / 180, { length: 6, fringes: 4, phase: 0 }));
+    const tree = trace(s);
+    const after = tree.segments.filter((g) => g.pathKey.endsWith('c'));
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.length).toBeLessThan(24);
+    expect(after.every((g) => g.thin && g.width <= 0.06)).toBe(true);
+    expect(after.every((g) => g.audible)).toBe(true);
+  });
+
+  it('splits white light into one thin colour per fringe, like a grating', () => {
+    const s = emptyScene();
+    s.elements.push(makeElement('emitter', { x: 3, y: 14 }, 0));
+    s.elements.push(makeElement('comb', { x: 10, y: 14 }, 0, { fringes: 5, phase: 0.5 }));
+    const lines = trace(s).segments.filter((g) => g.pathKey.endsWith('c'));
+    expect(lines).toHaveLength(5);
+    expect(new Set(lines.map((g) => g.dir.y.toFixed(3))).size).toBe(5);
+  });
+});

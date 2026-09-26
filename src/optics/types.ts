@@ -34,6 +34,8 @@ export interface RaySegment {
   pathKey: string;
   /** Number of mirror bounces on this branch (echo order). */
   bounces: number;
+  /** Narrowed to a thin line (interference comb): drawn as a line, never filled into a fan. */
+  thin: boolean;
   depth: number;
   audible: boolean;
 }

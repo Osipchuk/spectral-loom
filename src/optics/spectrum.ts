@@ -54,6 +54,37 @@ export function filterLight(light: RayLight, minNm: number, maxNm: number): { li
   return { light: { kind: 'band', minNm: lo, maxNm: hi }, gain: (hi - lo) / (light.maxNm - light.minNm) };
 }
 
+/** Position of a wavelength in pitch space: 0 at deep red (700 nm) … 1 at violet (400 nm). */
+export function pitchPosition(nm: number): number {
+  const lo = frequencyTHz(VISIBLE_MAX_NM);
+  const hi = frequencyTHz(VISIBLE_MIN_NM);
+  return Math.log2(frequencyTHz(nm) / lo) / Math.log2(hi / lo);
+}
+
+export function positionToNm(p: number): number {
+  const lo = frequencyTHz(VISIBLE_MAX_NM);
+  const hi = frequencyTHz(VISIBLE_MIN_NM);
+  return C_NM_THZ / (lo * (hi / lo) ** p);
+}
+
+/** Interference comb transmission: sharp bright fringes, dark in between. */
+export function combTransmission(nm: number, fringes: number, phase: number): number {
+  const x = Math.cos(Math.PI * (pitchPosition(nm) * fringes + phase));
+  return (x * x) ** 10;
+}
+
+/** Wavelengths of the comb's bright fringes that fall inside [minNm, maxNm]. */
+export function combPeaks(minNm: number, maxNm: number, fringes: number, phase: number): number[] {
+  const pLo = pitchPosition(maxNm);
+  const pHi = pitchPosition(minNm);
+  const out: number[] = [];
+  for (let k = Math.ceil(pLo * fringes + phase); k <= Math.floor(pHi * fringes + phase); k++) {
+    const p = (k - phase) / fringes;
+    if (p >= pLo && p <= pHi) out.push(positionToNm(p));
+  }
+  return out;
+}
+
 export function centroidNm(light: RayLight): number {
   return light.kind === 'mono' ? light.nm : (light.minNm + light.maxNm) / 2;
 }

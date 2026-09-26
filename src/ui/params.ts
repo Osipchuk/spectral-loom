@@ -6,6 +6,8 @@ export type FieldValue = number | string | boolean;
 interface FieldBase<T> {
   key: string;
   label: string;
+  /** Plain-language explanation shown behind the "?" next to the label. */
+  help?: string;
   get(target: T): FieldValue;
   set(target: T, v: FieldValue): void;
   /** Hide the field for this target (e.g. band limits on a white emitter). */
@@ -174,6 +176,12 @@ export const ELEMENT_FIELDS: Record<ElementKind, Field<SceneElement>[]> = {
     num('gain', 'Level', 0.1, 1, 0.05, pct),
   ],
   blocker: [rotation, num('length', 'Length', 0.5, 10, 0.5, cells)],
+  comb: [
+    rotation,
+    num('length', 'Length', 1, 10, 0.5, cells),
+    num('fringes', 'Fringes', 2, 14, 1),
+    num('phase', 'Phase', 0, 0.95, 0.05, (v) => `${Math.round(v * 100)}%`),
+  ],
   loom: [
     rotation,
     num('length', 'Length', 1, 14, 0.5, cells),
@@ -285,4 +293,56 @@ export const KIND_LABELS: Record<ElementKind, string> = {
   receptor: 'Receptor',
   blocker: 'Blocker',
   loom: 'Loom card',
+  comb: 'Interference comb',
 };
+
+const HELP: Record<string, string> = {
+  "rotation": "Which way the element faces. Hold Shift while rotating for 1° steps.",
+  "emitter.spectrum": "White light holds every colour, so every note. A band emits only a slice of the rainbow, so only those notes.",
+  "emitter.bandMin": "Where the band starts: 400 nm is violet (high notes), 700 nm is red (low notes).",
+  "emitter.bandMax": "Where the band ends: 400 nm is violet (high notes), 700 nm is red (low notes).",
+  "emitter.intensity": "How bright the beam is. Dimmer light plays quieter notes.",
+  "emitter.pulse": "The metronome: how often a swell of light, and so a note, is sent. Drone breathes once a bar.",
+  "prism.size": "Bigger glass catches a wider beam.",
+  "prism.dispersion": "How far this prism spreads the colours. A wider rainbow spreads the notes further apart.",
+  "mirror.length": "How long the mirror is.",
+  "mirror.reflectance": "How much light bounces back. Each bounce loses a little, so echoes fade.",
+  "mirror.splitter": "A beam splitter lets the rest of the light through: one beam becomes two, and two splitters facing each other make echoes.",
+  "lens.aperture": "How wide the lens is.",
+  "lens.focal": "Where it focuses light. Positive gathers light to a point: louder, brighter sound. Negative spreads it: softer, duller.",
+  "filter.length": "How wide the filter glass is.",
+  "filter.minNm": "Only colours between these two wavelengths pass; every other note is removed.",
+  "filter.maxNm": "Only colours between these two wavelengths pass; every other note is removed.",
+  "modulator.steps": "Length of the rhythmic cycle, in steps.",
+  "modulator.hits": "How many of those steps send a note, spread as evenly as possible (a Euclidean rhythm: 3 in 8 is a tresillo).",
+  "modulator.rotate": "Starts the pattern on a different step.",
+  "modulator.subdivision": "How long one step is.",
+  "modulator.depth": "How strongly each hit brightens the beam.",
+  "receptor.aperture": "How wide the slit is. Wide catches many colours, so chords; narrow catches one, so single notes.",
+  "receptor.instrument": "The sound: a soft pad, a plucked string, a bell, or drums (then colour picks the drum: red kick … violet hi-hat).",
+  "receptor.octave": "How low or high the reddest light sounds.",
+  "receptor.span": "How many octaves the rainbow is stretched over. More octaves, bigger jumps between neighbouring colours.",
+  "receptor.voices": "The most notes this receptor plays at once; the brightest win.",
+  "receptor.gain": "Volume of this receptor.",
+  "blocker.length": "How long the blocker is. Light that hits it stops, and so do its notes.",
+  "loom.length": "How wide the card is across the rainbow.",
+  "loom.subdivision": "How long one step of the card is.",
+  "loom.depth": "How strongly the card's swells brighten the light.",
+  "comb.length": "How wide the comb is across the light.",
+  "comb.fringes": "How many bright fringes span the rainbow. Each fringe lets one thin colour through: more fringes, more notes in the chord.",
+  "comb.phase": "Slides the fringes along the spectrum, so a different set of colours (notes) gets through.",
+  "global.bpm": "Tempo: how fast emitters pulse and cards advance.",
+  "global.scale": "Which notes the colours map to. Pentatonic never clashes; major and minor give full melodies.",
+  "global.root": "The key: the note the scale starts on.",
+  "global.c": "How fast light travels on this table. Slower light means longer delays from prism to receptor and wider strums.",
+  "global.quantize": "How strongly notes snap to the 1/16 grid. At 0% you hear the raw timing of the light.",
+  "global.dispersion": "How widely every prism spreads colour. Wider rainbows spread the notes apart.",
+  "global.raysPerSplit": "How many rays make up a rainbow. More rays, more distinct notes to catch.",
+  "global.gridSnap": "Snap positions to half-cells while dragging."
+};
+
+/** Attach help texts: `kind.key` for elements, `global.key` for table settings. */
+for (const [kind, fields] of Object.entries(ELEMENT_FIELDS)) {
+  for (const f of fields) f.help ??= HELP[`${kind}.${f.key}`] ?? HELP[f.key];
+}
+for (const f of GLOBAL_FIELDS) f.help ??= HELP[`global.${f.key}`];

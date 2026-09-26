@@ -20,7 +20,7 @@ function fanSpread(tree: RayTree): Map<number, [number, number]> {
 
   const out = new Map<number, [number, number]>();
   for (const g of tree.segments) {
-    if (!g.group) continue;
+    if (!g.group || g.thin) continue;
     let s0 = 0;
     let s1 = 0;
     let n = 0;

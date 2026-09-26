@@ -8,7 +8,7 @@ import {
   type Collider,
   type SegmentCollider,
 } from './geometry';
-import { centroidNm, filterLight, sampleBand, WHITE, type RayLight } from './spectrum';
+import { centroidNm, combPeaks, combTransmission, filterLight, pitchPosition, sampleBand, WHITE, type RayLight } from './spectrum';
 import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit, type TraceOptions } from './types';
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
 
@@ -31,6 +31,7 @@ interface RayState {
   group: RaySegment['group'];
   pathKey: string;
   ignoreId: string | null;
+  thin: boolean;
 }
 
 /** Max-heap on intensity so the segment budget is spent on the brightest rays first. */
@@ -119,6 +120,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       group: null,
       pathKey: el.id,
       ignoreId: null,
+      thin: false,
     });
   }
 
@@ -175,6 +177,7 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       group: ray.group,
       pathKey: ray.pathKey,
       bounces: ray.bounces,
+      thin: ray.thin,
       depth: ray.depth,
       audible: fanPower >= opts.audioThreshold,
     };
@@ -328,6 +331,35 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
         }
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: 'filter' };
         child({ d: ray.d, light: res.light, intensity: ray.intensity * res.gain * 0.95, ignoreId: c.elementId }, 'f');
+        break;
+      }
+
+      case 'comb': {
+        const el = byId.get(c.elementId);
+        if (el?.kind !== 'comb') break;
+        seg.endEvent = { kind: 'interact', elementId: c.elementId, role: 'comb' };
+        const thin = { width: Math.min(atEnd.width, 0.06), widthRate: 0, thin: true, ignoreId: c.elementId };
+        if (ray.light.kind === 'mono') {
+          const gain = combTransmission(ray.light.nm, el.fringes, el.phase);
+          if (gain < 0.04) {
+            seg.endEvent = { kind: 'absorbed', elementId: c.elementId };
+            break;
+          }
+          // Keep the fan's power per note: a thin line carries what its slice of the fan did.
+          child({ d: ray.d, intensity: ray.intensity * gain, ...thin }, 'c');
+          break;
+        }
+        // White light meeting the comb splits into thin coloured lines, like a grating.
+        const peaks = combPeaks(ray.light.minNm, ray.light.maxNm, el.fringes, el.phase);
+        const gid = ++groupCounter;
+        peaks.forEach((nm, index) => {
+          const angle = (pitchPosition(nm) - 0.5) * 0.35;
+          const d = norm({ x: ray.d.x * Math.cos(angle) - ray.d.y * Math.sin(angle), y: ray.d.x * Math.sin(angle) + ray.d.y * Math.cos(angle) });
+          child(
+            { d, light: { kind: 'mono', nm }, intensity: (ray.intensity * 0.85) / Math.max(1, peaks.length), ...thin, group: { id: gid, index, count: peaks.length } },
+            'c',
+          );
+        });
         break;
       }
 
