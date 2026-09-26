@@ -157,3 +157,51 @@ describe('engine 2 lets the optics play', () => {
     expect(mean(arp(prelude).map((t) => t.velocity))).toBeGreaterThan(mean(arp(noLens).map((t) => t.velocity)));
   });
 });
+
+describe('engine 2 chords spread out', () => {
+  const spread = (s: SceneModel, receptorId: string) => {
+    const t = planNotes(s, trace(s)).filter((x) => x.receptorId === receptorId && x.echo === 0);
+    const pans = t.map((x) => x.pan);
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const mp = mean(pans);
+    const md = mean(t.map((x) => x.midi));
+    const cov = mean(t.map((x) => (x.pan - mp) * (x.midi - md)));
+    return { width: Math.max(...pans) - Math.min(...pans), cov };
+  };
+
+  it('each note of a wide receptor sits where its colour lands on the slit', () => {
+    for (const [demo, receptor] of [
+      ['afterglow', 'ag-chords-receptor'],
+      ['gymnopedie', 'gym-accomp-receptor'],
+      ['canon', 'ground-receptor'],
+    ] as const) {
+      expect(spread(toEngine2(DEMO_SCENES.find((d) => d.id === demo)!.scene), receptor).width, demo).toBeGreaterThan(0.4);
+    }
+  });
+
+  it('stereo follows the table: mirror it left to right and every note swaps sides', () => {
+    const s = toEngine2(DEMO_SCENES.find((d) => d.id === 'canon')!.scene);
+    const mirrored = structuredClone(s);
+    for (const e of mirrored.elements) {
+      e.pos = { x: s.table.w - e.pos.x, y: e.pos.y };
+      e.rotation = Math.PI - e.rotation;
+    }
+    const pans = (sc: SceneModel) =>
+      new Map(planNotes(sc, trace(sc)).filter((t) => t.receptorId === 'ground-receptor' && t.echo === 0).map((t) => [t.midi, t.pan]));
+    const direction = (p: Map<number, number>): number => {
+      const midis = [...p.keys()].sort((x, y) => x - y);
+      return Math.sign(p.get(midis[midis.length - 1]!)! - p.get(midis[0]!)!);
+    };
+    const a = pans(s);
+    const b = pans(mirrored);
+    expect(a.size).toBeGreaterThan(5);
+    expect(direction(a)).not.toBe(0);
+    // Low-to-high runs the other way across the stereo field once the table is mirrored.
+    expect(direction(b)).toBe(-direction(a));
+  });
+
+  it('engine 1 keeps one place per receptor', () => {
+    const r = spread(DEMO_SCENES.find((d) => d.id === 'afterglow')!.scene, 'ag-chords-receptor');
+    expect(r.width).toBe(0);
+  });
+});

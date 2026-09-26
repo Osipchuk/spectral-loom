@@ -238,7 +238,7 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
   const heard = tree.receptorHits.filter((h) => receptors.has(h.receptorId) && h.intensity >= AUDIO_THRESHOLD);
   const coverage = slotCoverage(scene, heard);
 
-  type Acc = { degree: number; slot: number | null; w: number; power: number; own: number; u: number; uu: number; width: number; x: number };
+  type Acc = { degree: number; slot: number | null; w: number; power: number; own: number; u: number; uu: number; width: number };
   type Group = {
     receptor: Receptor;
     sourceId: string;
@@ -269,7 +269,7 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
       const nk = `${slot ?? ''}|${degree}`;
       let a = g.notes.get(nk);
       if (!a) {
-        a = { degree, slot, w: 0, power: 0, own: 0, u: 0, uu: 0, width: 0, x: 0 };
+        a = { degree, slot, w: 0, power: 0, own: 0, u: 0, uu: 0, width: 0 };
         g.notes.set(nk, a);
       }
       a.w += w;
@@ -278,7 +278,6 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
       a.u += w * u;
       a.uu += w * u * u;
       a.width += w * Math.max(hit.width, 0.05);
-      a.x += w * hit.pos.x;
     }
   }
 
@@ -289,6 +288,15 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
     const shift = softQuantizeShift(g.first, quantize);
     const basePan = receptorPan(scene, r);
     const pc = receptorPitch(scene.settings, r);
+    // A chord spreads across the stereo field, low to high over the range this receptor
+    // hears (by pitch, so a rainbow's crowded red end is not squeezed into the middle). The
+    // low side is where the slit's red end points on screen; an upright slit puts it left.
+    const slit = { x: -Math.sin(r.rotation), y: Math.cos(r.rotation) };
+    const lowEnd = lowerNotesEnd(g.notes.values());
+    const lowSide = lowEnd === 0 ? 0 : Math.abs(slit.x) > 0.25 ? Math.sign(slit.x * lowEnd) : -1;
+    const degs = [...g.notes.values()].map((a) => a.degree);
+    const dLo = Math.min(...degs);
+    const dSpan = Math.max(...degs) - dLo;
     for (const a of g.notes.values()) {
       // Share of this colour's light that comes through this slot, times its transmission.
       const p = Math.min(1, a.power / (g.raysPerDegree.get(a.degree) ?? 1));
@@ -299,7 +307,7 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
       // A colour only partly inside a slot fades out rather than cutting off.
       const fade = Math.min(1, p / 0.3);
       const velocity = Math.min(1, (0.18 + 0.38 * p + 0.5 * brightness) * r.gain * fade);
-      const across = (a.x / a.w - r.pos.x) / Math.max(0.5, r.aperture / 2);
+      const rank = dSpan > 0 ? (a.degree - dLo) / dSpan : 0.5;
       // A colour arrives when its earliest ray does, through whichever slot: the set of rays
       // of one colour never changes as glass moves, so neither does this jump.
       const travel = g.degreeFirst.get(a.degree)!;
@@ -315,12 +323,39 @@ function planNotesV2(scene: SceneModel, tree: RayTree): NoteTemplate[] {
         instrument: r.instrument,
         voices: r.voices,
         brightness,
-        pan: Math.max(-0.85, Math.min(0.85, basePan * 0.7 + across * 0.45)),
+        pan: Math.max(-0.85, Math.min(0.85, basePan * (lowSide === 0 ? 0.7 : 0.3) + STEREO_WIDTH * (1 - 2 * rank) * lowSide)),
         slot: a.slot,
       });
     }
   }
   return out;
+}
+
+/** Engine 2: how far a receptor's lowest and highest notes sit from the centre (−1…1 pan). */
+const STEREO_WIDTH = 0.75;
+
+/**
+ * Which end of a receptor's slit (u sign) the lower notes land on: −1, +1, or 0 when that
+ * cannot be told (one note).
+ */
+function lowerNotesEnd(notes: Iterable<{ degree: number; u: number; w: number }>): number {
+  let num = 0;
+  let n = 0;
+  let du = 0;
+  let dd = 0;
+  const list = [...notes].filter((a) => a.w > 0);
+  if (list.length < 2) return 0;
+  const mu = list.reduce((s, a) => s + a.u / a.w, 0) / list.length;
+  const md = list.reduce((s, a) => s + a.degree, 0) / list.length;
+  for (const a of list) {
+    num += (a.u / a.w - mu) * (a.degree - md);
+    du += (a.u / a.w - mu) ** 2;
+    dd += (a.degree - md) ** 2;
+    n += 1;
+  }
+  if (n < 2 || du === 0 || dd === 0) return 0;
+  // Pitch rises towards +u: the lower notes sit at the −u end.
+  return num > 0 ? -1 : 1;
 }
 
 /** Whether a pulse sounds a note: engine-2 cards open slots, engine-1 cards and chord glass pick pitches. */

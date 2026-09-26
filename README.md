@@ -43,8 +43,10 @@ table in place and keeps what it plays.
   - onsets are pulled to the grid **softly** (flat near grid lines, continuous everywhere),
     so no nudge throws a voice across the grid;
   - every note gets its own loudness and tone from the **irradiance** of its own light (a
-    lens that gathers a colour makes that note louder and brighter), and its own stereo
-    position from where it lands (turn a receptor across the table to widen the image).
+    lens that gathers a colour makes that note louder and brighter), and its own place in
+    the stereo field: a receptor's notes spread from low to high across it, the low side
+    being where the red end of its slit points on screen. Every synth voice has its own
+    filter and panner, so the notes of one chord sit apart.
 
   - a slot's edges are soft: each ray stands for the strip of card up to its neighbours, so
     a colour slides from one slot into the next gradually, and an open slot plays the
