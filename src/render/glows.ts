@@ -39,8 +39,7 @@ export class Glows {
 
   constructor(private frame: TableFrame) {}
 
-  setTree(tree: RayTree): void {
-    this.clear();
+  setTree(tree: RayTree, steady: (segmentId: number) => boolean = () => true): void {
     const merged = new Map<string, Spot>();
     const add = (s: Spot): void => {
       // Merge co-located spots (a dispersed fan hitting a wall) into one coloured glow.
@@ -55,6 +54,7 @@ export class Glows {
     };
 
     for (const g of tree.segments) {
+      if (!steady(g.id)) continue;
       const ev = g.endEvent;
       const rgb = lightToRGB(g.light);
       const end = this.frame.toWorld(g.end, BEAM_HEIGHT);
@@ -67,28 +67,40 @@ export class Glows {
       }
     }
     for (const f of tree.foci) {
+      if (!steady(f.segmentId)) continue;
       const seg = tree.segments[f.segmentId]!;
       add({ pos: this.frame.toWorld(f.pos, BEAM_HEIGHT), rgb: lightToRGB(seg.light), energy: f.strength * 2.2, size: 1.6 });
     }
 
+    // Sprites are reused: moving optics rebuild the glows many times a second.
+    let used = 0;
     for (const s of merged.values()) {
       if (s.energy < 0.01) continue;
       const k = 1 / Math.max(s.energy, 1e-6);
-      const mat = new THREE.SpriteMaterial({
-        map: this.texture,
-        color: new THREE.Color(s.rgb[0] * k, s.rgb[1] * k, s.rgb[2] * k),
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        transparent: true,
-      });
-      const sprite = new THREE.Sprite(mat);
+      let sprite = this.sprites[used];
+      if (!sprite) {
+        sprite = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: this.texture, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }),
+        );
+        sprite.renderOrder = 3;
+        this.sprites.push(sprite);
+        this.group.add(sprite);
+      }
+      used += 1;
+      sprite.visible = true;
+      (sprite.material as THREE.SpriteMaterial).color.setRGB(s.rgb[0] * k, s.rgb[1] * k, s.rgb[2] * k);
       sprite.position.copy(s.pos);
       const e = Math.min(s.energy, 2.5);
       sprite.scale.setScalar(s.size * (0.5 + Math.sqrt(e) * 0.8));
       sprite.userData.energy = e;
-      sprite.renderOrder = 3;
-      this.sprites.push(sprite);
-      this.group.add(sprite);
+    }
+    for (let i = used; i < this.sprites.length; i++) this.sprites[i]!.visible = false;
+    // Drop a long tail of idle sprites (a busy scene was replaced by a quiet one).
+    if (this.sprites.length > used * 2 + 16) {
+      for (const sp of this.sprites.splice(used + 16)) {
+        this.group.remove(sp);
+        sp.material.dispose();
+      }
     }
     this.applyGain();
   }

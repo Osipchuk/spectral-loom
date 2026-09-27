@@ -9,8 +9,9 @@ import type { GlobalSettings, SceneElement, SceneModel } from './types';
  * - selection: UI only
  * - load: whole scene replaced
  * - drop: the user let go of something they were dragging (no data change by itself)
+ * - restore: comes with load when the table is an earlier state of the same one (undo, redo)
  */
-export type ChangeKind = 'geometry' | 'toggle' | 'settings' | 'selection' | 'load' | 'drop';
+export type ChangeKind = 'geometry' | 'toggle' | 'settings' | 'selection' | 'load' | 'drop' | 'restore';
 export type Listener = (kinds: ReadonlySet<ChangeKind>) => void;
 
 export class SceneStore {
@@ -82,5 +83,12 @@ export class SceneStore {
     this.scene = cloneScene(scene);
     this.selectedId = null;
     this.emit('load', 'geometry', 'settings', 'selection');
+  }
+
+  /** Go back (or forward) to another state of the same table: undo, redo. Keeps the selection if it still exists. */
+  restore(scene: SceneModel): void {
+    this.scene = cloneScene(scene);
+    if (this.selectedId && !findElement(this.scene, this.selectedId)) this.selectedId = null;
+    this.emit('load', 'restore', 'geometry', 'settings', 'selection');
   }
 }

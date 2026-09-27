@@ -4,80 +4,111 @@ import * as Tone from 'tone';
 export const DRUM_PIECES = ['Kick', 'Tom', 'Snare', 'Clap', 'Hat', 'Open hat'] as const;
 export const DRUM_BASE_MIDI = 36;
 
+/** One kit piece: its synths (the snare has two) and the nodes that carry them to the kit's output. */
+interface Piece {
+  synths: Tone.ToneAudioNode[];
+  nodes: Tone.ToneAudioNode[];
+  hit(time: number, velocity: number): void;
+}
+
 /**
  * A small synthesized drum kit. Every piece is its own monophonic voice, so a kick and a
- * hat can land on the same step; all pieces share one output.
+ * hat can land on the same step; all pieces share one output. A piece is built on its first
+ * hit: a Tone synth keeps several audio nodes running even when silent (the two hats alone are
+ * a dozen oscillators' worth), and most receptors only ever play a few of the pieces.
  */
 export class DrumKit {
   readonly output: Tone.Gain;
-  private kick: Tone.MembraneSynth;
-  private tom: Tone.MembraneSynth;
-  private snare: Tone.NoiseSynth;
-  private snareBody: Tone.MembraneSynth;
-  private clap: Tone.NoiseSynth;
-  private hat: Tone.MetalSynth;
-  private openHat: Tone.MetalSynth;
-  private nodes: Tone.ToneAudioNode[] = [];
+  private pieces: (Piece | undefined)[] = [];
 
-  constructor(context: Tone.BaseContext) {
+  constructor(private context: Tone.BaseContext) {
     this.output = new Tone.Gain({ gain: 1, context });
-    const to = <T extends Tone.ToneAudioNode>(n: T, gain: number, filter?: Tone.Filter): T => {
+  }
+
+  private build(piece: number): Piece {
+    const context = this.context;
+    const nodes: Tone.ToneAudioNode[] = [];
+    const to = <T extends Tone.ToneAudioNode>(n: T, gain: number, filter?: Tone.BiquadFilter): T => {
       const g = new Tone.Gain({ gain, context });
       if (filter) {
         n.chain(filter, g, this.output);
-        this.nodes.push(filter);
+        nodes.push(filter);
       } else {
         n.chain(g, this.output);
       }
-      this.nodes.push(g);
+      nodes.push(g);
       return n;
     };
-    this.kick = to(
-      new Tone.MembraneSynth({ context, pitchDecay: 0.045, octaves: 7, envelope: { attack: 0.001, decay: 0.42, sustain: 0, release: 0.1 } }),
-      0.95,
-    );
-    this.tom = to(
-      new Tone.MembraneSynth({ context, pitchDecay: 0.06, octaves: 3, envelope: { attack: 0.001, decay: 0.32, sustain: 0, release: 0.1 } }),
-      0.55,
-    );
-    this.snare = to(
-      new Tone.NoiseSynth({ context, noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.17, sustain: 0, release: 0.05 } }),
-      0.4,
-      new Tone.Filter({ type: 'bandpass', frequency: 2200, Q: 0.7, context }),
-    );
-    this.snareBody = to(
-      new Tone.MembraneSynth({ context, pitchDecay: 0.02, octaves: 2, envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.05 } }),
-      0.35,
-    );
-    this.clap = to(
-      new Tone.NoiseSynth({ context, noise: { type: 'pink' }, envelope: { attack: 0.004, decay: 0.12, sustain: 0, release: 0.08 } }),
-      0.45,
-      new Tone.Filter({ type: 'bandpass', frequency: 1300, Q: 1.2, context }),
-    );
-    this.hat = to(
-      new Tone.MetalSynth({
-        context,
-        harmonicity: 5.1,
-        modulationIndex: 32,
-        resonance: 7000,
-        octaves: 1.5,
-        envelope: { attack: 0.001, decay: 0.045, release: 0.02 },
-      }),
-      0.16,
-      new Tone.Filter({ type: 'highpass', frequency: 6500, context }),
-    );
-    this.openHat = to(
-      new Tone.MetalSynth({
-        context,
-        harmonicity: 5.1,
-        modulationIndex: 32,
-        resonance: 6000,
-        octaves: 1.5,
-        envelope: { attack: 0.001, decay: 0.32, release: 0.1 },
-      }),
-      0.12,
-      new Tone.Filter({ type: 'highpass', frequency: 5500, context }),
-    );
+    // Tone.BiquadFilter is the plain native filter (see toneFilter in engine.ts); Q 1 is what
+    // Tone.Filter used when none was given.
+    const filter = (type: BiquadFilterType, frequency: number, Q = 1): Tone.BiquadFilter => new Tone.BiquadFilter({ type, frequency, Q, context });
+    switch (piece) {
+      case 0: {
+        const kick = to(
+          new Tone.MembraneSynth({ context, pitchDecay: 0.045, octaves: 7, envelope: { attack: 0.001, decay: 0.42, sustain: 0, release: 0.1 } }),
+          0.95,
+        );
+        return { synths: [kick], nodes, hit: (time, v) => kick.triggerAttackRelease('C1', 0.2, time, v) };
+      }
+      case 1: {
+        const tom = to(
+          new Tone.MembraneSynth({ context, pitchDecay: 0.06, octaves: 3, envelope: { attack: 0.001, decay: 0.32, sustain: 0, release: 0.1 } }),
+          0.55,
+        );
+        return { synths: [tom], nodes, hit: (time, v) => tom.triggerAttackRelease('G1', 0.2, time, v) };
+      }
+      case 2: {
+        const snare = to(
+          new Tone.NoiseSynth({ context, noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.17, sustain: 0, release: 0.05 } }),
+          0.4,
+          filter('bandpass', 2200, 0.7),
+        );
+        const body = to(
+          new Tone.MembraneSynth({ context, pitchDecay: 0.02, octaves: 2, envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.05 } }),
+          0.35,
+        );
+        return {
+          synths: [snare, body],
+          nodes,
+          hit: (time, v) => {
+            snare.triggerAttackRelease(0.1, time, v);
+            body.triggerAttackRelease('D2', 0.06, time, v * 0.8);
+          },
+        };
+      }
+      case 3: {
+        const clap = to(
+          new Tone.NoiseSynth({ context, noise: { type: 'pink' }, envelope: { attack: 0.004, decay: 0.12, sustain: 0, release: 0.08 } }),
+          0.45,
+          filter('bandpass', 1300, 1.2),
+        );
+        return {
+          synths: [clap],
+          nodes,
+          hit: (time, v) => {
+            // A clap is a few quick bursts.
+            clap.triggerAttackRelease(0.02, time, v * 0.7);
+            clap.triggerAttackRelease(0.08, time + 0.012, v);
+          },
+        };
+      }
+      case 4: {
+        const hat = to(
+          new Tone.MetalSynth({ context, harmonicity: 5.1, modulationIndex: 32, resonance: 7000, octaves: 1.5, envelope: { attack: 0.001, decay: 0.045, release: 0.02 } }),
+          0.16,
+          filter('highpass', 6500),
+        );
+        return { synths: [hat], nodes, hit: (time, v) => hat.triggerAttackRelease(300, 0.03, time, v) };
+      }
+      default: {
+        const openHat = to(
+          new Tone.MetalSynth({ context, harmonicity: 5.1, modulationIndex: 32, resonance: 6000, octaves: 1.5, envelope: { attack: 0.001, decay: 0.32, release: 0.1 } }),
+          0.12,
+          filter('highpass', 5500),
+        );
+        return { synths: [openHat], nodes, hit: (time, v) => openHat.triggerAttackRelease(300, 0.2, time, v) };
+      }
+    }
   }
 
   /** Last scheduled start per piece: Tone's noise sources refuse starts that are not later. */
@@ -89,33 +120,19 @@ export class DrumKit {
     if (time <= last + 0.001) return;
     this.lastHit.set(piece, time + (piece === 3 ? 0.012 : 0));
     const v = Math.max(0.05, Math.min(1, velocity));
-    switch (piece) {
-      case 0:
-        this.kick.triggerAttackRelease('C1', 0.2, time, v);
-        break;
-      case 1:
-        this.tom.triggerAttackRelease('G1', 0.2, time, v);
-        break;
-      case 2:
-        this.snare.triggerAttackRelease(0.1, time, v);
-        this.snareBody.triggerAttackRelease('D2', 0.06, time, v * 0.8);
-        break;
-      case 3:
-        // A clap is a few quick bursts.
-        this.clap.triggerAttackRelease(0.02, time, v * 0.7);
-        this.clap.triggerAttackRelease(0.08, time + 0.012, v);
-        break;
-      case 4:
-        this.hat.triggerAttackRelease(300, 0.03, time, v);
-        break;
-      default:
-        this.openHat.triggerAttackRelease(300, 0.2, time, v);
-    }
+    // Pieces 0–4 by number; anything else (above or below the kit) is the open hat, as ever.
+    const key = piece >= 0 && piece <= 4 ? Math.floor(piece) : 5;
+    const p = (this.pieces[key] ??= this.build(key));
+    p.hit(time, v);
   }
 
   dispose(): void {
-    for (const s of [this.kick, this.tom, this.snare, this.snareBody, this.clap, this.hat, this.openHat]) s.dispose();
-    for (const n of this.nodes) n.dispose();
+    for (const p of this.pieces) {
+      if (!p) continue;
+      for (const s of p.synths) s.dispose();
+      for (const n of p.nodes) n.dispose();
+    }
+    this.pieces = [];
     this.output.dispose();
   }
 }

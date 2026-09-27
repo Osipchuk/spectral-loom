@@ -1,19 +1,28 @@
 import type { ScaleName } from '../scene/types';
 import { NOTE_NAMES, SCALES } from './scales';
 
-/** Progressions as scale-degree roots (0 = I, 3 = IV, 4 = V, 5 = vi …). */
-export const PROGRESSIONS: { id: string; label: string; roots: number[] }[] = [
+/**
+ * Progressions as scale-degree roots (0 = I, 3 = IV, 4 = V, 5 = vi …). `single` entries hold
+ * one chord for good; their ids are the chord's roman numeral.
+ */
+export const PROGRESSIONS: { id: string; label: string; roots: number[]; single?: true }[] = [
   { id: 'pop', label: 'I – V – vi – IV', roots: [0, 4, 5, 3] },
   { id: 'canon', label: 'Canon: I – V – vi – iii – IV – I – IV – V', roots: [0, 4, 5, 2, 3, 0, 3, 4] },
   { id: 'doowop', label: 'I – vi – IV – V', roots: [0, 5, 3, 4] },
   { id: 'minor', label: 'vi – IV – I – V', roots: [5, 3, 0, 4] },
   { id: 'blues', label: 'I – IV – I – V', roots: [0, 3, 0, 4] },
   { id: 'drift', label: 'I – IV (drift)', roots: [0, 3] },
-  { id: 'I', label: 'Hold I', roots: [0] },
-  { id: 'IV', label: 'Hold IV', roots: [3] },
-  { id: 'V', label: 'Hold V', roots: [4] },
-  { id: 'vi', label: 'Hold vi', roots: [5] },
+  { id: 'I', label: 'I', roots: [0], single: true },
+  { id: 'ii', label: 'ii', roots: [1], single: true },
+  { id: 'iii', label: 'iii', roots: [2], single: true },
+  { id: 'IV', label: 'IV', roots: [3], single: true },
+  { id: 'V', label: 'V', roots: [4], single: true },
+  { id: 'vi', label: 'vi', roots: [5], single: true },
 ];
+
+export function isSingleChord(id: string): boolean {
+  return !!PROGRESSIONS.find((p) => p.id === id)?.single;
+}
 
 export function progression(id: string): number[] {
   return (PROGRESSIONS.find((p) => p.id === id) ?? PROGRESSIONS[0]!).roots;

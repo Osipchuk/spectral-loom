@@ -9,7 +9,7 @@ import {
   type SegmentCollider,
 } from './geometry';
 import { cardU, isCut, loomSlots, slotAt } from './slots';
-import { centroidNm, combPeaks, combTransmission, filterLight, pitchPosition, sampleBand, WHITE, type RayLight } from './spectrum';
+import { centroidNm, combTransmission, filterLight, sampleBand, WHITE, type RayLight } from './spectrum';
 import { DEFAULT_TRACE_OPTIONS, type RaySegment, type RayTree, type ReceptorHit, type TraceOptions } from './types';
 import { add, dot, fromAngle, madd, norm, perp, scale, sub, type Vec2 } from './vec2';
 
@@ -104,7 +104,6 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
   const heap = new RayHeap();
   let groupCounter = 0;
   let truncated = false;
-  const engine2 = scene.settings.engine === 2;
 
   for (const el of scene.elements) {
     if (el.kind !== 'emitter' || !el.enabled || el.intensity <= 0) continue;
@@ -321,17 +320,24 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
         const sc = c as SegmentCollider;
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: 'lens' };
         // Paraxial thin lens: slope relative to the optical axis changes by -h/f.
+        const f = lensFocal(el.focal);
         const axis = sc.normal;
         const tangent = perp(axis);
         const h = dot(sub(end, el.pos), tangent);
         const along = dot(ray.d, axis);
         const slope = dot(ray.d, tangent) / Math.max(Math.abs(along), 1e-3);
-        const d = norm(add(scale(axis, Math.sign(along) || 1), scale(tangent, slope - h / el.focal)));
+        const d = norm(add(scale(axis, Math.sign(along) || 1), scale(tangent, slope - h / f)));
+        // Fermat: a converging lens is thicker in the middle, so a ray through its centre is
+        // held back just enough that rays through the rim, which travel further to the focus,
+        // arrive together with it (a diverging lens the other way round). Measured from the
+        // centre, so the axis keeps its timing. Without this a rainbow gathered to a point
+        // arrives as a ragged strum.
         child(
           {
             d,
+            s: ray.s + bestT - (h * h) / (2 * f),
             intensity: ray.intensity * 0.97,
-            widthRate: atEnd.rate - atEnd.width / el.focal,
+            widthRate: atEnd.rate - atEnd.width / f,
             depth: ray.depth + 1,
             ignoreId: c.elementId,
           },
@@ -357,30 +363,44 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
         const el = byId.get(c.elementId);
         if (el?.kind !== 'comb') break;
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: 'comb' };
-        const thin = { width: Math.min(atEnd.width, 0.06), widthRate: 0, thin: true, ignoreId: c.elementId };
+        // The comb straightens what it lets through: every line leaves square to it, so a
+        // fan of colours comes out as parallel lines. (A real interference filter only picks
+        // colours; picking and straightening together is what a grating and a collimating
+        // lens do in a spectrograph. Here one element does both.)
+        const sc = c as SegmentCollider;
+        const out = dot(ray.d, sc.normal) >= 0 ? sc.normal : scale(sc.normal, -1);
+        const thin = { d: out, width: Math.min(atEnd.width, 0.06), widthRate: 0, thin: true, ignoreId: c.elementId };
         if (ray.light.kind === 'mono') {
           const gain = combTransmission(ray.light.nm, el.fringes, el.phase);
           if (gain < 0.04) {
-            // Between fringes a real grating is dark but not black: the rainbow carries on
-            // faintly behind the comb — too dim to sound, bright enough to see.
+            // Between fringes the comb is dark but not black: the rainbow carries on faintly
+            // behind it, as it was going — too dim to sound, bright enough to see.
             child({ d: ray.d, intensity: ray.intensity * COMB_LEAK, ignoreId: c.elementId }, 'c-');
             break;
           }
-          // Keep the fan's power per note: a thin line carries what its slice of the fan did.
-          child({ d: ray.d, intensity: ray.intensity * gain, ...thin }, 'c');
+          // A colour of the fan on a fringe: a thin straight line, keeping its slice's power.
+          child({ intensity: ray.intensity * gain, ...thin }, 'c');
           break;
         }
-        // White light meeting the comb splits into thin coloured lines, like a grating.
-        const peaks = combPeaks(ray.light.minNm, ray.light.maxNm, el.fringes, el.phase);
+        // White (or band) light: the comb makes no colours (only a prism does). It spreads the
+        // beam over its whole length as parallel strands of the same light, one per fringe,
+        // evenly spaced like slits: the comb's length sets the width, Fringes how dense.
+        const n = Math.max(1, Math.round(el.fringes));
         const gid = ++groupCounter;
-        peaks.forEach((nm, index) => {
-          const angle = (pitchPosition(nm) - 0.5) * 0.35;
-          const d = norm({ x: ray.d.x * Math.cos(angle) - ray.d.y * Math.sin(angle), y: ray.d.x * Math.sin(angle) + ray.d.y * Math.cos(angle) });
+        const along = perp(out);
+        const at = (best.u - 0.5) * el.length;
+        for (let index = 0; index < n; index++) {
+          const slit = ((index + 0.5) / n - 0.5) * el.length;
           child(
-            { d, light: { kind: 'mono', nm }, intensity: (ray.intensity * 0.85) / Math.max(1, peaks.length), ...thin, group: { id: gid, index, count: peaks.length } },
+            {
+              o: madd(end, along, slit - at),
+              intensity: (ray.intensity * 0.85) / n,
+              ...thin,
+              group: { id: gid, index, count: n },
+            },
             'c',
           );
-        });
+        }
         break;
       }
 
@@ -388,10 +408,10 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
       case 'loom':
       case 'chord': {
         seg.endEvent = { kind: 'interact', elementId: c.elementId, role: c.role };
-        // Engine 2: a cut card remembers where the light crossed it and through which slot.
-        // A card not cut yet (no slots) still holds pitches, like an engine-1 card.
+        // A cut card remembers where the light crossed it and through which slot. A card not
+        // cut yet (no slots) still holds pitches.
         const el = byId.get(c.elementId);
-        const u = engine2 && el?.kind === 'loom' && isCut(el) ? cardU(el, end) : null;
+        const u = el?.kind === 'loom' && isCut(el) ? cardU(el, end) : null;
         const slot = u !== null && el?.kind === 'loom' ? slotAt(loomSlots(el), u) : null;
         child(
           { d: ray.d, intensity: ray.intensity, pulseSourceId: c.elementId, pulseOriginS: ray.s + bestT, ignoreId: c.elementId, slot, cardU: u },
@@ -403,6 +423,15 @@ export function trace(scene: SceneModel, options: Partial<TraceOptions> = {}): R
   }
 
   return { segments, receptorHits, foci, truncated };
+}
+
+/** Shortest focal length a lens has: f = 0 would bend light by infinity (NaN rays). */
+export const MIN_FOCAL = 0.5;
+
+/** A lens's focal length as the optics use it: never shorter than MIN_FOCAL, 0 counts as +. */
+export function lensFocal(focal: number): number {
+  if (!Number.isFinite(focal)) return MIN_FOCAL;
+  return Math.abs(focal) >= MIN_FOCAL ? focal : focal < 0 ? -MIN_FOCAL : MIN_FOCAL;
 }
 
 /** Width of a segment at distance t from its start, never below `minWidth`. */

@@ -4,6 +4,7 @@ import { EMITTER_HALF, MODULATOR_RADIUS, prismVertices } from '../../optics/geom
 import type { SceneElement } from '../../scene/types';
 import { BEAM_HEIGHT, yawFor, type TableFrame } from '../frame';
 import { bandToRGB, type RGB } from '../spectral-color';
+import { createGlassSurface, type GlassSurface } from './chord-glass';
 import { CARD_BOTTOM, CARD_HEIGHT, createCardSurface, type CardSurface } from './loom-card';
 import type { Materials } from './materials';
 
@@ -29,9 +30,11 @@ export interface ElementView {
   /** Per-view dynamic materials (glows that react to music), owned by the view. */
   dynamic: {
     slit?: THREE.MeshBasicMaterial;
-    dots?: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>[];
+    /** Modulator step lights: one instance per step, lit through the instance colour. */
+    dots?: THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
     aperture?: THREE.MeshBasicMaterial;
     card?: CardSurface;
+    glass?: GlassSurface;
   };
   dispose(): void;
 }
@@ -162,24 +165,10 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
     }
 
     case 'chord': {
-      // Stained glass: panes of spectral colour between lead lines.
-      const c = document.createElement('canvas');
-      c.width = 256;
-      c.height = 64;
-      const g = c.getContext('2d')!;
-      const panes = 7;
-      for (let i = 0; i < panes; i++) {
-        const [r, gg, b] = bandToRGB(700 - (300 * (i + 1)) / panes, 700 - (300 * i) / panes);
-        const max = Math.max(r, gg, b, 1e-3);
-        g.fillStyle = `rgb(${Math.round((r / max) * 200)},${Math.round((gg / max) * 200)},${Math.round((b / max) * 200)})`;
-        g.fillRect((i * c.width) / panes, 0, c.width / panes, c.height);
-      }
-      g.fillStyle = '#1a1510';
-      for (let i = 0; i <= panes; i++) g.fillRect((i * c.width) / panes - 2, 0, 4, c.height);
-      g.fillRect(0, 0, c.width, 4);
-      g.fillRect(0, c.height - 4, c.width, 4);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
+      // Stained glass: panes of spectral colour between lead lines, redrawn as chords change.
+      const surface = createGlassSurface(el.length);
+      dynamic.glass = surface;
+      const tex = surface.texture;
       const glassMat = new THREE.MeshPhysicalMaterial({
         map: tex,
         transparent: true,
@@ -188,7 +177,7 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
         metalness: 0,
         emissive: new THREE.Color(0xffffff),
         emissiveMap: tex,
-        emissiveIntensity: disabled ? 0 : 0.18,
+        emissiveIntensity: disabled ? 0 : 0.45,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
@@ -209,7 +198,6 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       }
       pickSize = [0.7, el.length];
       radius = el.length / 2 + 0.5;
-      group.userData.texture = tex;
       break;
     }
 
@@ -217,14 +205,13 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
       const pane = mesh(new RoundedBoxGeometry(0.06, 0.95, el.length, 2, 0.02), m(mats.comb));
       pane.position.y = 0.55;
       group.add(pane);
-      // Fine rulings: a few dark lines across the glass.
-      const rulings = new THREE.Group();
+      // Fine rulings: a few dark lines across the glass, drawn as one instanced mesh.
       const n = Math.max(4, el.fringes * 2);
-      for (let i = 0; i < n; i++) {
-        const line = mesh(new THREE.BoxGeometry(0.075, 0.9, 0.012), m(mats.anodized), false);
-        line.position.set(0, 0.55, -el.length / 2 + ((i + 0.5) * el.length) / n);
-        rulings.add(line);
-      }
+      const rulings = new THREE.InstancedMesh(new THREE.BoxGeometry(0.075, 0.9, 0.012), m(mats.anodized), n);
+      rulings.receiveShadow = true;
+      const at = new THREE.Matrix4();
+      for (let i = 0; i < n; i++) rulings.setMatrixAt(i, at.makeTranslation(0, 0.55, -el.length / 2 + ((i + 0.5) * el.length) / n));
+      rulings.computeBoundingSphere();
       group.add(rulings);
       const frame = mesh(new RoundedBoxGeometry(0.16, 0.08, el.length + 0.2, 2, 0.02), m(mats.anodized));
       frame.position.y = 0.04;
@@ -343,16 +330,20 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
         const a = (i / 3) * Math.PI * 2 + Math.PI / 6;
         group.add(post(mats, Math.cos(a) * MODULATOR_RADIUS, Math.sin(a) * MODULATOR_RADIUS, BEAM_HEIGHT));
       }
-      dynamic.dots = [];
+      // Step lights: one instanced mesh, each step's colour set per frame (see App).
+      const dotMat = new THREE.MeshBasicMaterial();
+      owned.push(dotMat);
+      const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.055, 12, 8), dotMat, el.steps);
+      const at = new THREE.Matrix4();
+      const off = new THREE.Color(0x222222);
       for (let i = 0; i < el.steps; i++) {
         const a = (i / el.steps) * Math.PI * 2;
-        const dotMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
-        owned.push(dotMat);
-        const dot = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 8), dotMat);
-        dot.position.set(Math.cos(a) * (MODULATOR_RADIUS + 0.2), BEAM_HEIGHT, -Math.sin(a) * (MODULATOR_RADIUS + 0.2));
-        group.add(dot);
-        dynamic.dots.push(dot);
+        dots.setMatrixAt(i, at.makeTranslation(Math.cos(a) * (MODULATOR_RADIUS + 0.2), BEAM_HEIGHT, -Math.sin(a) * (MODULATOR_RADIUS + 0.2)));
+        dots.setColorAt(i, off);
       }
+      dots.computeBoundingSphere();
+      group.add(dots);
+      dynamic.dots = dots;
       pickSize = [MODULATOR_RADIUS * 2.4, MODULATOR_RADIUS * 2.4];
       radius = MODULATOR_RADIUS + 0.55;
       break;
@@ -374,11 +365,13 @@ export function createElementView(el: SceneElement, mats: Materials): ElementVie
     dispose() {
       group.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose();
+        if (o instanceof THREE.InstancedMesh) o.dispose();
       });
       for (const mat of owned) mat.dispose();
       dynamic.card?.texture.dispose();
       (group.userData.texture as THREE.Texture | undefined)?.dispose();
       dynamic.card?.alpha.dispose();
+      dynamic.glass?.texture.dispose();
     },
   };
 }

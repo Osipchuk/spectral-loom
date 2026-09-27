@@ -189,12 +189,52 @@ describe('interference comb', () => {
     expect(faint.every((g) => !g.audible)).toBe(true);
   });
 
-  it('splits white light into one thin colour per fringe, like a grating', () => {
+  it('splits a white beam into parallel white strands, one per fringe: colours come only from a prism', () => {
     const s = emptyScene();
     s.elements.push(makeElement('emitter', { x: 3, y: 14 }, 0));
     s.elements.push(makeElement('comb', { x: 10, y: 14 }, 0, { fringes: 5, phase: 0.5 }));
     const lines = trace(s).segments.filter((g) => g.pathKey.endsWith('c'));
     expect(lines).toHaveLength(5);
-    expect(new Set(lines.map((g) => g.dir.y.toFixed(3))).size).toBe(5);
+    for (const g of lines) {
+      expect(g.light).toEqual({ kind: 'band', minNm: expect.any(Number), maxNm: expect.any(Number) });
+      expect(g.dir.x).toBeCloseTo(1, 9);
+      expect(g.dir.y).toBeCloseTo(0, 9);
+    }
+    // Evenly across the comb's whole length (3 by default), wherever the beam hits it.
+    const ys = lines.map((g) => g.start.y).sort((a, b) => a - b);
+    expect(ys[0]).toBeCloseTo(14 - 1.2, 6);
+    expect(ys[4]).toBeCloseTo(14 + 1.2, 6);
+    for (let i = 1; i < 5; i++) expect(ys[i]! - ys[i - 1]!).toBeCloseTo(0.6, 6);
+  });
+
+  it('straightens a prism fan: the colours on its fringes leave as parallel lines', () => {
+    const s = emptyScene();
+    s.settings.dispersion = 12;
+    s.elements.push(makeElement('emitter', { x: 3, y: 14 }, 0));
+    s.elements.push(makeElement('prism', { x: 10, y: 14 }, (70 * Math.PI) / 180, { size: 4 }));
+    // Across the fan, facing along it (the fan leaves the prism heading about −40°).
+    s.elements.push(makeElement('comb', { x: 16.9, y: 9.7 }, (-39.6 * Math.PI) / 180, { length: 6, fringes: 4, phase: 0 }));
+    const lines = trace(s).segments.filter((g) => g.pathKey.endsWith('c') && g.intensity > 0.005);
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    const dirs = new Set(lines.map((g) => `${g.dir.x.toFixed(4)},${g.dir.y.toFixed(4)}`));
+    expect(dirs.size).toBe(1);
+    expect(new Set(lines.map((g) => g.light.kind === 'mono' && Math.round(g.light.nm / 10))).size).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('lens focal length edge cases', () => {
+  it('a lens of focal length 0 (or nearly) traces finite rays, no NaN', () => {
+    for (const focal of [0, -0, 0.01, -0.01, Number.NaN]) {
+      const s = emptyScene();
+      s.elements.push(
+        makeElement('emitter', { x: 4, y: 14 }, 0),
+        makeElement('lens', { x: 12, y: 14 }, 0, { focal, aperture: 4 }),
+      );
+      const tree = trace(s);
+      expect(tree.segments.length).toBeGreaterThan(1);
+      for (const g of tree.segments) {
+        expect([g.width, g.widthRate, g.end.x, g.end.y, g.dir.x, g.dir.y].every(Number.isFinite), `focal ${focal}`).toBe(true);
+      }
+    }
   });
 });

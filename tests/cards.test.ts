@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { trace } from '../src/optics/tracer';
 import { DEMO_SCENES } from '../src/scene/demos';
-import { recutLoom, toEngine1, toEngine2 } from '../src/scene/engine2';
+import { recutLoom } from '../src/scene/cards';
 import type { SceneModel } from '../src/scene/types';
 import { notesInWindow, planNotes, softQuantizeShift, type NoteEvent } from '../src/timing/arrivals';
 import { pulseSources } from '../src/timing/sources';
@@ -37,41 +37,70 @@ function compare(a: NoteEvent[], b: NoteEvent[]): { unmatched: number; extra: nu
   return { unmatched, extra, maxDt };
 }
 
-/** Echoes follow the light in engine 2 instead of being rounded; everything else must match. */
-const TIMING_TOLERANCE: Record<string, number> = { echo: 0.12 };
+/** Laying out a score slides a voice by at most half a sixteenth, onto the nearest grid line. */
+const HALF_GRID = 0.126;
+/**
+ * Echoes follow the light, not the grid; Canon's bass chord is a half-beat strum across a
+ * tilted slit, and its upper notes are each pulled to the nearest line on their own.
+ */
+const TIMING_TOLERANCE: Record<string, number> = { echo: 0.2, canon: 0.2 };
 
-describe('engine 2 plays the demos as engine 1 does', () => {
+describe('cutting the scores into slots keeps what they play', () => {
   for (const demo of DEMO_SCENES) {
     it(demo.id, () => {
-      const v1 = events(demo.scene);
-      const v2scene = toEngine2(demo.scene);
-      expect(v2scene.settings.engine).toBe(2);
-      const r = compare(v1, events(v2scene));
+      // The score as written (cards not cut yet, rows are pitches) against the cut cards.
+      const r = compare(events(demo.authored), events(demo.scene));
       expect(r.unmatched, 'notes lost').toBe(0);
       expect(r.extra, 'notes added').toBe(0);
-      expect(r.maxDt, 'timing').toBeLessThan(TIMING_TOLERANCE[demo.id] ?? 0.03);
+      expect(r.maxDt, 'timing').toBeLessThan(TIMING_TOLERANCE[demo.id] ?? HALF_GRID);
     });
   }
 
-  it('turns every card into slots and back into the same pitches', () => {
+  it('starts every direct voice on the grid', () => {
     for (const demo of DEMO_SCENES) {
-      const v2 = toEngine2(demo.scene);
-      for (const el of v2.elements) if (el.kind === 'loom') expect(el.slots?.length, el.id).toBeGreaterThan(0);
-      const back = toEngine1(v2);
-      const r = compare(events(demo.scene), events(back));
-      expect(r.unmatched + r.extra, demo.id).toBe(0);
+      if (demo.scene.elements.some((e) => e.motion)) continue;
+      const plan = planNotes(demo.scene, trace(demo.scene));
+      const first = new Map<string, number>();
+      for (const t of plan) {
+        if (t.echo > 0) continue;
+        const k = `${t.receptorId}|${t.sourceId}`;
+        first.set(k, Math.min(first.get(k) ?? Infinity, t.offsetBeats));
+      }
+      for (const [k, onset] of first) {
+        const off = Math.abs(onset / 0.25 - Math.round(onset / 0.25)) * 0.25;
+        expect(off, `${demo.id} ${k} starts at ${onset.toFixed(3)}`).toBeLessThan(0.03);
+      }
+    }
+  });
+
+  it('keeps every voice where it was laid out (a shift of a sixteenth fails here)', () => {
+    const onsets: Record<string, string> = {};
+    for (const demo of DEMO_SCENES) {
+      if (demo.scene.elements.some((e) => e.motion)) continue;
+      for (const t of planNotes(demo.scene, trace(demo.scene))) {
+        const k = `${demo.id} ${t.receptorId} ${t.sourceId} echo ${t.echo}`;
+        const v = Math.round(t.offsetBeats * 4) / 4;
+        if (!(k in onsets) || Number(onsets[k]) > v) onsets[k] = v.toFixed(2);
+      }
+    }
+    expect(onsets).toMatchSnapshot();
+  });
+
+  it('turns every card into slots', () => {
+    for (const demo of DEMO_SCENES) {
+      for (const el of demo.scene.elements) if (el.kind === 'loom') expect(el.slots?.length, el.id).toBeGreaterThan(0);
     }
   });
 
   it('re-cutting a card at the same geometry keeps its melody', () => {
-    const v2 = toEngine2(DEMO_SCENES.find((d) => d.id === 'ode')!.scene);
+    const v2 = DEMO_SCENES.find((d) => d.id === 'ode')!.scene;
     const again = recutLoom(v2, 'melody-loom');
     expect(compare(events(v2), events(again)).unmatched).toBe(0);
   });
 });
 
-describe('engine 2 lets the optics play', () => {
-  const ode = (): SceneModel => toEngine2(DEMO_SCENES.find((d) => d.id === 'ode')!.scene);
+describe('the optics play the card', () => {
+  const ode = (): SceneModel => DEMO_SCENES.find((d) => d.id === 'ode')!.scene;
   const melody = (s: SceneModel): number[] => events(s).filter((e) => e.receptorId === 'melody-receptor').map((e) => e.midi);
 
   it('turning the prism changes the notes a card plays, not whether it plays', () => {
@@ -83,11 +112,11 @@ describe('engine 2 lets the optics play', () => {
     expect(b.length).toBeGreaterThan(a.length * 0.8);
     const changed = b.filter((m, i) => m !== a[i]).length;
     expect(changed).toBeGreaterThan(0);
-    // Engine 1 ignores the same turn: the card is the score there.
-    const v1 = DEMO_SCENES.find((d) => d.id === 'ode')!.scene;
-    const v1turned = structuredClone(v1);
-    v1turned.elements.find((e) => e.id === 'melody-prism')!.rotation += (4 * Math.PI) / 180;
-    expect(melody(v1turned)).toEqual(melody(v1));
+    // A card not cut yet ignores the same turn: its rows are pitches.
+    const written = DEMO_SCENES.find((d) => d.id === 'ode')!.authored;
+    const writtenTurned = structuredClone(written);
+    writtenTurned.elements.find((e) => e.id === 'melody-prism')!.rotation += (4 * Math.PI) / 180;
+    expect(melody(writtenTurned)).toEqual(melody(written));
   });
 
   const turned = (scene: SceneModel, id: string, deg: number): NoteEvent[] => {
@@ -119,19 +148,17 @@ describe('engine 2 lets the optics play', () => {
     return worst;
   };
 
-  it('engine 1 snaps: turning the bass prism of Canon by a hair throws the voice a sixteenth', () => {
-    expect(worstJump(DEMO_SCENES.find((d) => d.id === 'canon')!.scene, 'ground-prism')).toBeGreaterThan(0.2);
-  });
-
-  // Colours fade between slots and each note keeps its colour's timing, so what is left is
-  // a colour's earliest ray slipping off the edge of a receptor: under 4 ms.
-  it('engine 2 glides: turning any element never makes a note jump in time', () => {
+  // Colours fade between slots, so what is left is the earliest ray slipping off the edge of
+  // a receptor. A card's chord strikes together on its group's first light, so such a slip
+  // moves the whole chord: under 0.008 beat (about 5 ms at the slowest demo), far below what
+  // the ear can place.
+  it('glides: turning any element never makes a note jump in time', () => {
     for (const demo of DEMO_SCENES) {
-      const base = toEngine2(demo.scene);
+      const base = demo.scene;
       for (const el of base.elements) {
         if (el.kind !== 'prism' && el.kind !== 'mirror' && el.kind !== 'lens') continue;
         // Pitches may change as colours slide across slots; notes that stay must not jump.
-        expect(worstJump(base, el.id), `${demo.id} ${el.id}`).toBeLessThan(0.004);
+        expect(worstJump(base, el.id), `${demo.id} ${el.id}`).toBeLessThan(0.008);
       }
     }
   });
@@ -148,7 +175,7 @@ describe('engine 2 lets the optics play', () => {
   });
 
   it('a lens that gathers the light makes its notes louder and brighter', () => {
-    const prelude = toEngine2(DEMO_SCENES.find((d) => d.id === 'prelude')!.scene);
+    const prelude = DEMO_SCENES.find((d) => d.id === 'prelude')!.scene;
     const arp = (s: SceneModel) => planNotes(s, trace(s)).filter((t) => t.receptorId === 'arp-receptor');
     const noLens = structuredClone(prelude);
     noLens.elements = noLens.elements.filter((e) => e.id !== 'arp-lens');
@@ -158,7 +185,7 @@ describe('engine 2 lets the optics play', () => {
   });
 });
 
-describe('engine 2 chords spread out', () => {
+describe('chords spread out', () => {
   const spread = (s: SceneModel, receptorId: string) => {
     const t = planNotes(s, trace(s)).filter((x) => x.receptorId === receptorId && x.echo === 0);
     const pans = t.map((x) => x.pan);
@@ -175,12 +202,12 @@ describe('engine 2 chords spread out', () => {
       ['gymnopedie', 'gym-accomp-receptor'],
       ['canon', 'ground-receptor'],
     ] as const) {
-      expect(spread(toEngine2(DEMO_SCENES.find((d) => d.id === demo)!.scene), receptor).width, demo).toBeGreaterThan(0.4);
+      expect(spread(DEMO_SCENES.find((d) => d.id === demo)!.scene, receptor).width, demo).toBeGreaterThan(0.4);
     }
   });
 
   it('stereo follows the table: mirror it left to right and every note swaps sides', () => {
-    const s = toEngine2(DEMO_SCENES.find((d) => d.id === 'canon')!.scene);
+    const s = DEMO_SCENES.find((d) => d.id === 'canon')!.scene;
     const mirrored = structuredClone(s);
     for (const e of mirrored.elements) {
       e.pos = { x: s.table.w - e.pos.x, y: e.pos.y };
@@ -198,10 +225,5 @@ describe('engine 2 chords spread out', () => {
     expect(direction(a)).not.toBe(0);
     // Low-to-high runs the other way across the stereo field once the table is mirrored.
     expect(direction(b)).toBe(-direction(a));
-  });
-
-  it('engine 1 keeps one place per receptor', () => {
-    const r = spread(DEMO_SCENES.find((d) => d.id === 'afterglow')!.scene, 'ag-chords-receptor');
-    expect(r.width).toBe(0);
   });
 });

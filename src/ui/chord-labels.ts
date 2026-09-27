@@ -6,7 +6,7 @@ import { h } from './dom';
 /** Floating chip above each chord glass naming the chord it is letting through right now. */
 export class ChordLabels {
   readonly el = h('div.sl-chords', { 'aria-live': 'off' });
-  private chips = new Map<string, { node: HTMLElement; name: HTMLElement; roman: HTMLElement }>();
+  private chips = new Map<string, { node: HTMLElement; name: HTMLElement; roman: HTMLElement; notes: HTMLElement }>();
   private v = new THREE.Vector3();
 
   update(
@@ -14,6 +14,8 @@ export class ChordLabels {
     beat: number | null,
     settings: { scale: ScaleName; root: number },
     toWorld: (g: ChordGlass) => THREE.Vector3,
+    /** Notes of the current chord whose light crosses the glass and reaches a receptor. */
+    notesOf: (g: ChordGlass) => string[],
     camera: THREE.Camera,
     width: number,
     height: number,
@@ -26,9 +28,10 @@ export class ChordLabels {
       if (!chip) {
         const name = h('span.sl-chord-name');
         const roman = h('span.sl-chord-roman');
-        const node = h('span.sl-chord', {}, name, roman);
+        const notes = h('span.sl-chord-notes');
+        const node = h('span.sl-chord', {}, name, roman, notes);
         this.el.append(node);
-        chip = { node, name, roman };
+        chip = { node, name, roman, notes };
         this.chips.set(g.id, chip);
       }
       const roots = progression(g.progression);
@@ -42,6 +45,8 @@ export class ChordLabels {
         void chip.node.offsetWidth;
         chip.node.classList.add('sl-chord-pop');
       }
+      const notes = notesOf(g).join(' ');
+      if (chip.notes.textContent !== notes) chip.notes.textContent = notes;
       this.v.copy(toWorld(g)).project(camera);
       const x = (this.v.x * 0.5 + 0.5) * width;
       const y = (-this.v.y * 0.5 + 0.5) * height;

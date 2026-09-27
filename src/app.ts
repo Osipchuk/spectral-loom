@@ -3,26 +3,34 @@ import { AudioEngine } from './audio/engine';
 import { renderTimelineWav, renderWav } from './audio/export';
 import type { ScheduledNote } from './audio/engine';
 import type { Timeline } from './capture/timeline';
+import type { Caption, FilmTimeline } from './capture/film';
 import { holdSeconds } from './audio/instruments';
 import { ENVELOPES, envelopeAt } from './audio/instruments';
 import { degreeCount, degreeToMidi, lightToDegree, receptorPitch } from './music/pitch';
 import { lightToRGB } from './render/spectral-color';
 import { midiName, NoteLabels, type NoteLabel } from './ui/note-labels';
 import { ChordLabels } from './ui/chord-labels';
+import { Sfx } from './audio/sfx';
+import { SfxDirector } from './ui/sfx-director';
 import { DRUM_BASE_MIDI, DRUM_PIECES } from './audio/drums';
-import { CALM_NIGHT, moodWeather, weatherName, type Weather } from './music/mood';
+import { CALM_NIGHT, SkyDirector, weatherName, type Weather } from './music/mood';
 import { AUDIO_THRESHOLD } from './timing/arrivals';
 import { trace } from './optics/tracer';
 import type { RayTree } from './optics/types';
 import { dot, fromAngle, perp, sub } from './optics/vec2';
 import { drawCard } from './render/elements/loom-card';
+import { drawChordGlass, type GlassMark } from './render/elements/chord-glass';
+import { chordDegrees, progression } from './music/chords';
+import { cardU } from './optics/slots';
 import { INSTRUMENT_COLORS } from './render/elements/element-views';
 import { QUALITY, Renderer, type Quality } from './render/renderer';
+import { ResolutionGovernor } from './render/adaptive';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene, serializeScene } from './scene/serialize';
+import { History, Sessions } from './scene/sessions';
 import { SceneStore, type ChangeKind } from './scene/store';
-import type { ChordGlass, EngineVersion, Loom, SceneModel } from './scene/types';
-import { cutNewCards, recutLoom, toEngine1, toEngine2 } from './scene/engine2';
+import type { ChordGlass, Loom, SceneModel } from './scene/types';
+import { cutNewCards, recutLoom } from './scene/cards';
 import { hasMotion, MovingPlan, poseAt } from './timing/motion';
 import { isCut, loomSlots } from './optics/slots';
 import { notesInWindow, planNotes, type NoteTemplate } from './timing/arrivals';
@@ -40,18 +48,27 @@ import { degreeToWavelength } from './music/pitch';
 import { emptyScene } from './scene/defaults';
 import type { ElementKind } from './scene/types';
 
+/** A scene with cards written in pitches (a new card, an older file) gets them cut on the way in. */
+function withCardsCut(scene: SceneModel): SceneModel {
+  if (!scene.elements.some((e) => e.kind === 'loom' && !isCut(e))) return scene;
+  const out = structuredClone(scene);
+  cutNewCards(out);
+  return out;
+}
+
+/** The author's tip jar, linked quietly from the start screen. */
+const COFFEE_URL = 'https://buymeacoffee.com/evgenyosipchuk';
+
 export interface AppOptions {
   /** Scene to open; omitted → an empty table with the welcome screen. */
   scene?: SceneModel;
   demoId?: string | null;
-  /** Engine that demos open in (the scene carries its own). Default 1. */
-  engine?: EngineVersion;
 }
 
-/** The empty table the welcome screen and tutorial start from. The tutorial teaches engine 2. */
-export function starterScene(engine: EngineVersion = 1): SceneModel {
+/** The empty table the welcome screen and tutorial start from. */
+export function starterScene(): SceneModel {
   const s = emptyScene('Empty table');
-  s.settings = { ...s.settings, engine, bpm: 100, scale: 'majorPent', root: 0 };
+  s.settings = { ...s.settings, bpm: 100, scale: 'majorPent', root: 0 };
   return s;
 }
 
@@ -78,18 +95,19 @@ export class App {
   private lastPose = 0;
   private lastEditorRefresh = 0;
   private sources = new Map<string, PulseSource>();
-  /** Per loom card: where each pitch's ray crosses it (−0.5…0.5 along the card); engine 2: slot centres. */
+  /** Per loom card: where each pitch's ray crosses it (−0.5…0.5 along the card); cut cards: slot centres. */
   private cardLayout = new Map<string, Map<number, number>>();
-  /** Engine-2 cards: width of each slot, as a fraction of the card. */
+  /** Cut cards: width of each slot, as a fraction of the card. */
   private cardSlotWidth = new Map<string, Map<number, number>>();
-  /** Engine demos open in; follows the engine picker. */
-  private enginePref: EngineVersion;
+  /** Per chord glass: where each colour crosses it and the note it plays downstream. */
+  private glassMarks = new Map<string, (GlassMark & { label: string })[]>();
   private dirty = { optics: true, crossfade: false, views: true };
   private raf = 0;
   private visible = true;
   private resizeObserver: ResizeObserver;
   private intersectionObserver: IntersectionObserver;
   private unsubscribe: () => void;
+  private unsubscribeHistory: () => void;
   private stats: HTMLElement;
   private frames = { count: 0, t0: performance.now() };
   private demoId: string | null;
@@ -108,6 +126,16 @@ export class App {
   private previewClock: BeatClock;
 
   private tutorial: Tutorial | null = null;
+  /** Interface sounds: the table answers handling even while the music is stopped. */
+  private sfx: SfxDirector;
+  /** The user's tables, remembered in this browser (see Sessions). */
+  private sessions = new Sessions();
+  private history: History;
+  /** Where the open table is remembered: a demo id, 'canvas', 'tutorial'; null = not kept. */
+  private sessionKey: string | null = null;
+  /** The open demo as written, to tell whether the user changed it. */
+  private originalJson: string | null = null;
+  private snapTimer: number | null = null;
   private loomEditor: LoomEditor;
   /** Per loom card: the pitches (or drums) its light can reach, for the editor. */
   private cardRows = new Map<string, LoomRows>();
@@ -118,10 +146,17 @@ export class App {
   };
 
   constructor(host: HTMLElement, opts: AppOptions) {
-    const scene = opts.scene ?? starterScene(opts.engine);
-    this.store = new SceneStore(scene);
     this.demoId = opts.demoId ?? null;
-    this.enginePref = opts.engine ?? scene.settings.engine;
+    // A demo opens as the user last left it, if they changed it in this browser.
+    const demo = DEMO_SCENES.find((d) => d.id === this.demoId);
+    if (demo) {
+      this.sessionKey = demo.id;
+      this.originalJson = serializeScene(withCardsCut(parseScene(demo.scene)));
+    }
+    const saved = demo ? this.sessions.load(demo.id) : null;
+    const scene = saved ? withCardsCut(saved) : opts.scene ? withCardsCut(opts.scene) : starterScene();
+    this.store = new SceneStore(scene);
+    this.history = new History(serializeScene(this.store.scene));
     this.engine = new AudioEngine(scene.settings.bpm);
     this.canvas = h('canvas.sl-canvas', { 'aria-label': 'Spectral Loom table' });
     this.stats = h('div.sl-stats', { 'aria-hidden': 'true' });
@@ -129,6 +164,7 @@ export class App {
     host.append(this.root);
 
     this.renderer = new Renderer(this.canvas, this.store.scene, loadQuality());
+    this.renderer.setSimple(loadSimple());
     this.previewClock = new BeatClock(scene.settings.bpm);
     this.previewClock.anchor(performance.now() / 1000, 0);
     const shared = this.renderer.beams.shared;
@@ -137,6 +173,9 @@ export class App {
       const e = slot === 'neutral' ? { attack: 0.08, decay: 0.6, sustain: 0, release: 1.2 } : ENVELOPES[slot];
       (shared.uEnv!.value as THREE.Vector4[])[i]!.set(Math.max(0.04, e.attack), Math.max(0.02, e.decay / 3), e.sustain, Math.max(0.02, e.release / 4));
     });
+    this.engine.setVoiceBudget(QUALITY[this.renderer.quality].voices);
+    this.sfx = new SfxDirector(this.store, new Sfx());
+    this.sfx.sfx.setMasterDb(scene.settings.masterDb);
     this.interaction = new Interaction(this.root, this.canvas, this.renderer, this.store, () => {});
     this.panels = new Panels(this.store, {
       onPaletteDown: (kind, e) => this.interaction.beginPlace(kind, e, e.currentTarget as HTMLElement),
@@ -153,20 +192,34 @@ export class App {
         onRecord: () => void this.record(),
         onQuality: (q) => {
           this.renderer.setQuality(q);
+          this.governor.hold();
+          this.engine.setVoiceBudget(QUALITY[q].voices);
           saveQuality(q);
           this.resize();
         },
         onVolume: (db) => {
           this.store.scene.settings.masterDb = db;
           this.engine.setMasterDb(db);
+          this.sfx.sfx.setMasterDb(db);
         },
-        onEngine: (e) => this.setEngine(e),
+        onUiSounds: (on) => this.sfx.sfx.setEnabled(on),
+        onSimple: (on) => {
+          this.renderer.setSimple(on);
+          saveSimple(on);
+          this.lastMood = 0;
+        },
+        onNewCanvas: () => this.newCanvas(),
+        onUndo: () => this.undo(),
+        onRedo: () => this.redo(),
+        onRestore: () => this.restoreOriginal(),
+        onSeek: (beat) => this.engine.seek(beat),
       },
       scene.settings.masterDb,
       this.renderer.quality,
+      this.sfx.sfx.enabled,
+      this.renderer.simple,
     );
     this.transport.setScene(this.demoId);
-    this.transport.setEngine(scene.settings.engine);
 
     const home = h('button.sl-title-name', { type: 'button', text: 'Spectral Loom', title: 'Back to the start screen' });
     home.addEventListener('click', () => this.goHome());
@@ -179,11 +232,18 @@ export class App {
       this.store,
       (id) => this.rowsForCard(id),
       (id) => this.recutCard(id),
+      (id, step) => this.setCardPhase(id, step),
     );
     this.root.append(this.noteLabels.el, this.chordLabels.el, this.loomEditor.el, title, this.transport.bar, this.transport.caption, this.panels.palette, this.panels.side, hint, this.stats, this.overlay);
 
     this.unsubscribe = this.store.subscribe((kinds) => this.onChange(kinds));
+    this.unsubscribeHistory = this.store.subscribe((kinds) => this.onHistory(kinds));
+    this.updateHistoryUi();
     this.root.addEventListener('keydown', this.onKey);
+    this.root.addEventListener('pointerdown', this.unlockSfx, true);
+    this.root.addEventListener('keydown', this.unlockSfx, true);
+    this.root.addEventListener('click', this.onUiClick);
+    this.root.addEventListener('input', this.onUiInput);
     // Browsers suspend audio (device change, sleep, autoplay rules): say so, resume on the next click.
     this.soundChip = h('button.sl-chip', { type: 'button', hidden: true, text: 'Sound paused by the browser — click to resume' });
     this.soundChip.addEventListener('click', () => void this.engine.resume());
@@ -272,8 +332,23 @@ export class App {
       });
       demos.append(b);
     }
-    const empty = h('button.sl-link', { type: 'button', text: 'or start with an empty table' });
-    empty.addEventListener('click', () => this.dismissOverlay());
+    const empty = h('button.sl-empty-btn', { type: 'button', text: '＋ Empty canvas' });
+    empty.addEventListener('click', () => this.newCanvas());
+    // Pick up where the user left off, if this browser remembers a table.
+    const last = this.sessions.last();
+    const lastDemo = DEMO_SCENES.find((d) => d.id === last);
+    const cont = last
+      ? h('button.sl-continue-btn', { type: 'button' }, h('span', { text: 'Continue where you left off' }), h('span.sl-continue-sub', { text: lastDemo ? lastDemo.title : last === 'tutorial' ? 'your tutorial table' : 'your canvas' }))
+      : null;
+    cont?.addEventListener('click', () => {
+      if (lastDemo) {
+        this.loadDemo(lastDemo.id);
+        void this.start();
+      } else {
+        this.loadScene(this.sessions.load(last!) ?? starterScene(), null, last);
+        this.dismissOverlay();
+      }
+    });
     return h(
       'div.sl-overlay.sl-welcome',
       {},
@@ -285,11 +360,14 @@ export class App {
         h('p.sl-overlay-text', {
           text: 'Place glass on a table and a beam of light plays it. White light splits into colours, every colour is a pitch, and light travels slowly — so distance becomes time.',
         }),
+        cont,
         tutorialBtn,
         h('p.sl-overlay-foot', { text: 'A two-minute guided tour · sound on' }),
         h('div.sl-welcome-label', { text: 'Or listen to a finished table' }),
         demos,
         empty,
+        h('p.sl-overlay-foot', { text: 'Your tables are kept in this browser: close the tab, come back, carry on.' }),
+        h('a.sl-coffee', { href: COFFEE_URL, target: '_blank', rel: 'noopener', text: '☕ Buy me a coffee' }),
       ),
     );
   }
@@ -299,7 +377,7 @@ export class App {
     this.engine.pause();
     this.transport.setPlaying(false);
     this.tutorial?.close();
-    this.loadScene(starterScene(this.enginePref));
+    this.loadScene(starterScene(), null, null);
     this.overlay?.remove();
     this.overlay = this.buildWelcome();
     this.root.append(this.overlay);
@@ -314,7 +392,7 @@ export class App {
   }
 
   private startTutorial(): void {
-    this.loadScene(starterScene(2));
+    this.loadScene(starterScene(), null, 'tutorial');
     this.dismissOverlay();
     // Build the audio graph now, inside this click, so later steps can start sound.
     void this.engine.start(this.store.scene.settings.masterDb);
@@ -327,6 +405,7 @@ export class App {
       },
       relayout: () => this.resize(),
       settle: () => this.cutCards(),
+      celebrate: () => this.sfx.success(),
       openDemo: (id) => {
         this.tutorial?.close();
         this.loadDemo(id);
@@ -369,6 +448,13 @@ export class App {
   }
 
   private onKey = (e: KeyboardEvent): void => {
+    const typing = (e.target as HTMLElement).closest('input, select, textarea');
+    if ((e.ctrlKey || e.metaKey) && !typing && (e.key === 'z' || e.key === 'Z' || e.key === 'y')) {
+      e.preventDefault();
+      if (e.key === 'y' || e.shiftKey) this.redo();
+      else this.undo();
+      return;
+    }
     if (e.key !== ' ' || (e.target as HTMLElement).closest('input, select, textarea, button')) return;
     e.preventDefault();
     void this.togglePlay();
@@ -382,9 +468,10 @@ export class App {
       this.dirty.views = true;
     }
     if (kinds.has('toggle')) this.dirty.crossfade = true;
-    // Engine 2: a card dropped into light is cut there, keeping the notes it plays.
+    // A card dropped into light is cut there, keeping the notes it plays.
     if (kinds.has('drop')) this.cutCards();
-    if (kinds.has('load')) this.transport.setEngine(this.store.scene.settings.engine);
+    // A new table may compile new shaders: its first frames are no measure of the load.
+    if (kinds.has('load')) this.governor.hold();
     if (kinds.has('settings') || kinds.has('load')) {
       const s = this.store.scene.settings;
       if (s.bpm !== this.engine.clock.bpm) this.engine.setBpm(s.bpm);
@@ -407,6 +494,7 @@ export class App {
   }
 
   private resize(): void {
+    this.governor.hold(2);
     const r = this.root.getBoundingClientRect();
     this.renderer.resize(Math.max(1, Math.round(r.width)), Math.max(1, Math.round(r.height)));
     const pal = this.panels.palette.getBoundingClientRect();
@@ -452,6 +540,7 @@ export class App {
     this.tree = known ?? trace(scene);
     const plan = scene === this.store.scene ? this.plan : planNotes(scene, this.tree);
     this.cardLayout = this.computeCardLayout(this.tree);
+    this.glassMarks = this.computeGlassMarks(scene, this.tree);
     // Moving light relabels the card editor's rows; a few times a second is plenty.
     if (this.loomEditor.openId && (edited || now - this.lastEditorRefresh > 0.25)) {
       this.loomEditor.refresh();
@@ -472,12 +561,61 @@ export class App {
     this.noteLabels.set(this.computeNoteLabels(this.tree), (p, y) => this.renderer.frame.toWorld(p, y));
   }
 
-  /** Moving optics: re-pose the table for the beat being heard (at most 30 times a second). */
+  /** Moving optics: re-pose the table for the beat being heard (12–30 times a second, by quality). */
   private followMotion(wall: number, beat: number | null): void {
-    if (!this.moving || beat === null || Math.abs(beat - this.posedBeat) < 1e-4 || wall - this.lastPose < 1 / 30) return;
+    if (!this.moving || beat === null || Math.abs(beat - this.posedBeat) < 1e-4 || wall - this.lastPose < 1 / QUALITY[this.renderer.quality].motionHz) return;
     this.lastPose = wall;
     this.posedBeat = beat;
     this.drawLight(wall, poseAt(this.store.scene, beat), false);
+  }
+
+  /**
+   * Where each colour crosses each chord glass, for light that goes on to a receptor, with
+   * the note it plays there. A glass feeding several receptors shows the one hearing most.
+   */
+  private computeGlassMarks(scene: SceneModel, tree: RayTree): Map<string, (GlassMark & { label: string })[]> {
+    const glasses = new Map(scene.elements.filter((e): e is ChordGlass => e.kind === 'chord' && e.enabled).map((g) => [g.id, g]));
+    const perReceptor = new Map<string, Map<string, Map<number, GlassMark & { label: string }>>>();
+    for (const hit of tree.receptorHits) {
+      const glass = glasses.get(hit.pulseSourceId);
+      const r = scene.elements.find((e) => e.id === hit.receptorId);
+      if (!glass || r?.kind !== 'receptor' || !r.enabled || hit.intensity < AUDIO_THRESHOLD) continue;
+      let seg: RayTree['segments'][number] | undefined = tree.segments[hit.segmentId];
+      while (seg && !(seg.endEvent.kind === 'interact' && seg.endEvent.elementId === glass.id)) {
+        seg = seg.parent === null ? undefined : tree.segments[seg.parent];
+      }
+      if (!seg) continue;
+      const u = cardU(glass, seg.end);
+      const pc = receptorPitch(scene.settings, r);
+      const degree = lightToDegree(hit.light, pc);
+      const midi = degreeToMidi(degree, pc);
+      const byReceptor = perReceptor.get(glass.id) ?? new Map<string, Map<number, GlassMark & { label: string }>>();
+      perReceptor.set(glass.id, byReceptor);
+      const marks = byReceptor.get(r.id) ?? new Map<number, GlassMark & { label: string }>();
+      byReceptor.set(r.id, marks);
+      const m = marks.get(degree);
+      if (m) {
+        m.lo = Math.min(m.lo, u);
+        m.hi = Math.max(m.hi, u);
+      } else {
+        const label = r.instrument === 'drums' ? (DRUM_PIECES[midi - DRUM_BASE_MIDI] ?? '') : midiName(midi);
+        marks.set(degree, { degree, lo: u, hi: u, rgb: lightToRGB(hit.light), label });
+      }
+    }
+    const out = new Map<string, (GlassMark & { label: string })[]>();
+    for (const [id, byReceptor] of perReceptor) {
+      const main = [...byReceptor.values()].sort((a, b) => b.size - a.size)[0]!;
+      out.set(id, [...main.values()].sort((a, b) => a.degree - b.degree));
+    }
+    return out;
+  }
+
+  /** Chord-tone degrees a glass lets through at `beat` (the first chord when stopped). */
+  private glassChord(g: ChordGlass, beat: number | null): { index: number; degrees: Set<number> } {
+    const roots = progression(g.progression);
+    const bpc = Math.max(0.25, Number(g.beatsPerChord));
+    const index = beat === null ? 0 : Math.floor(beat / bpc) % roots.length;
+    return { index, degrees: new Set(chordDegrees(roots[index]!, this.store.scene.settings.scale)) };
   }
 
   /** One label per pitch per receptor, where that colour's light lands on the slit. */
@@ -523,7 +661,7 @@ export class App {
   }
 
   /**
-   * Engine-2 cards: one row per slot, labelled with the note (or notes) whose light falls
+   * Cut cards: one row per slot, labelled with the note (or notes) whose light falls
    * through it now; dark slots stay as rows too, so holes punched there are not lost.
    */
   private computeSlotLayout(tree: RayTree): Map<string, Map<number, number>> {
@@ -579,14 +717,9 @@ export class App {
 
   private computeCardLayout(tree: RayTree): Map<string, Map<number, number>> {
     const scene = this.store.scene;
-    const slotted = scene.settings.engine === 2;
-    // Engine 2: cut cards have slots; a card not cut yet still has pitch rows, as in engine 1.
-    const out = slotted ? this.computeSlotLayout(tree) : new Map<string, Map<number, number>>();
-    if (!slotted) {
-      this.cardRows = new Map();
-      this.cardSlotWidth = new Map();
-    }
-    const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom' && !(slotted && isCut(e))).map((l) => [l.id, l]));
+    // Cut cards have slots; a card not cut yet still has pitch rows.
+    const out = this.computeSlotLayout(tree);
+    const looms = new Map(scene.elements.filter((e): e is Loom => e.kind === 'loom' && !isCut(e)).map((l) => [l.id, l]));
     for (const hit of tree.receptorHits) {
       const loom = looms.get(hit.pulseSourceId);
       const receptor = this.store.get(hit.receptorId);
@@ -619,19 +752,43 @@ export class App {
   }
 
   private lastFrame = 0;
+  private lastTick = 0;
+  /** Adaptive resolution: frames drawn against frames asked for, in half-second windows. */
+  private governor = new ResolutionGovernor();
+  private window = { t0: 0, ticks: 0, frames: 0 };
 
   private frame = (): void => {
     this.raf = 0;
     if (this.capture || !this.visible || document.hidden) return;
     const now = performance.now() / 1000;
-    // Frame cap (Eco draws at 30 fps to leave CPU for audio).
-    const minDt = 1 / QUALITY[this.renderer.quality].fps - 0.004;
-    if (now - this.lastFrame >= minDt) {
-      this.lastFrame = now;
-      this.renderAt(now, null);
+    // A long gap (hidden tab, scrolled away, a stall) says nothing about the load: start over.
+    if (now - this.lastTick > 0.25) {
+      this.window = { t0: now, ticks: 0, frames: 0 };
+      this.governor.hold(2);
     }
+    this.lastTick = now;
+    this.window.ticks += 1;
+    // Frame cap (Eco draws at 30 fps to leave CPU for audio). The schedule advances by whole
+    // intervals, so a 144 Hz display gets 60 fps, not every second tick (72); after a stall
+    // it restarts from now instead of catching up.
+    const interval = 1 / QUALITY[this.renderer.quality].fps;
+    if (now - this.lastFrame >= interval - 0.004) {
+      this.lastFrame = now - this.lastFrame > interval * 2 ? now : this.lastFrame + interval;
+      this.renderAt(now, null);
+      this.window.frames += 1;
+    }
+    this.adaptResolution(now);
     this.schedule();
   };
+
+  private adaptResolution(now: number): void {
+    const seconds = now - this.window.t0;
+    if (seconds < 0.5) return;
+    const { ticks, frames } = this.window;
+    this.window = { t0: now, ticks: 0, frames: 0 };
+    const step = this.governor.feed({ seconds, ticks, frames, capFps: QUALITY[this.renderer.quality].fps }, this.renderer.canLowerResolution, this.renderer.canRaiseResolution);
+    if (step !== 0) this.renderer.stepResolution(step);
+  }
 
   /**
    * Draw one frame. `virtual` (capture mode) replaces the audio clock with a scripted time,
@@ -656,7 +813,8 @@ export class App {
     this.updateLight(heard, clock);
     this.updateInstruments(heard, beat);
     this.transport.setBeat(beat, this.store.scene.settings.beatsPerBar);
-    this.loomEditor.setBeat(beat);
+    if (!this.captureClock) this.transport.setPosition(this.engine.position(), this.songBeats(), this.store.scene.settings.beatsPerBar);
+    this.loomEditor.setBeat(this.captureClock ? beat : this.engine.position());
     this.updateMood(heard, wall);
 
     const sel = this.store.selected ?? null;
@@ -671,6 +829,10 @@ export class App {
       beat,
       this.store.scene.settings,
       (g) => this.renderer.frame.toWorld(g.pos, 1.25),
+      (g) => {
+        const chord = this.glassChord(g, beat).degrees;
+        return (this.glassMarks.get(g.id) ?? []).filter((m) => chord.has(m.degree)).map((m) => m.label);
+      },
       this.renderer.camera,
       this.canvas.clientWidth,
       this.canvas.clientHeight,
@@ -702,6 +864,8 @@ export class App {
     this.overlay = null;
     this.store.select(null);
     this.root.classList.add('sl-capture');
+    // Films show the full sky, whatever this browser's display setting.
+    this.renderer.setSimple(false);
     const scene = timeline.at(0);
     this.captureClock = new BeatClock(scene.settings.bpm);
     this.captureClock.anchor(0, 0);
@@ -722,10 +886,27 @@ export class App {
       this.dirty.views = true;
       this.dirty.crossfade = toggled;
     }
+    this.showCaption((tl as Partial<FilmTimeline>).caption?.(t) ?? null);
     Object.assign(this.renderer.angles, tl.camera(t));
     this.renderer.atmosphere.setWeather(tl.weather(t), true);
     this.renderer.updateCamera();
     this.renderAt(t, this.captureClock);
+  }
+
+  private captionEl: HTMLElement | null = null;
+
+  /** Film captions: what to notice right now, large, over the picture. */
+  private showCaption(c: Caption | null): void {
+    if (!this.captionEl) {
+      this.captionEl = h('div.sl-film-caption', {}, h('div.sl-film-caption-text'), h('div.sl-film-caption-sub'));
+      this.root.append(this.captionEl);
+    }
+    const [text, sub] = [...this.captionEl.children] as HTMLElement[];
+    this.captionEl.style.opacity = String(c?.opacity ?? 0);
+    if (c) {
+      text!.textContent = c.text;
+      sub!.textContent = c.sub ?? '';
+    }
   }
 
   /** The film's soundtrack, rendered offline against the same timeline. */
@@ -783,27 +964,44 @@ export class App {
         const src = this.sources.get(el.id);
         const hits = new Set(src?.events.map((e) => Math.round(e.beat / stepBeats)));
         const cur = beat === null ? -1 : Math.floor(beat / stepBeats) % el.steps;
-        view.dynamic.dots.forEach((dot, i) => {
+        const dots = view.dynamic.dots;
+        for (let i = 0; i < dots.count; i++) {
           const on = hits.has(i);
           const c = i === cur ? (on ? 3.2 : 0.6) : on ? 0.9 : 0.08;
-          this.tmpColor.setRGB(c * 1.0, c * 0.78, c * 0.45);
-          dot.material.color.copy(this.tmpColor);
-        });
+          dots.setColorAt(i, this.tmpColor.setRGB(c * 1.0, c * 0.78, c * 0.45));
+        }
+        dots.instanceColor!.needsUpdate = true;
       } else if (el.kind === 'loom' && view.dynamic.card) {
         drawCard(view.dynamic.card, el, this.cardLayout.get(el.id) ?? new Map(), beat ?? 0, this.cardSlotWidth.get(el.id));
+      } else if (el.kind === 'chord' && view.dynamic.glass) {
+        drawChordGlass(view.dynamic.glass, this.glassMarks.get(el.id) ?? [], this.glassChord(el, beat).degrees);
       }
     }
   }
 
-  /** Let the sky follow the music: re-estimate the mood twice a second. */
+  /** Keeps the slow drift of the day and decides when lightning answers a heavy hit. */
+  private skyDirector = new SkyDirector();
+
+  /**
+   * Let the sky follow the music: re-estimate the mood twice a second; check every frame
+   * whether a loud low hit brings lightning, so the flash lands on the beat.
+   */
   private updateMood(heard: number, wall: number): void {
-    if (this.capture || wall - this.lastMood < 0.5) return;
+    if (this.capture) return;
+    const atmosphere = this.renderer.atmosphere;
+    const playing = this.engine.playing || this.captureClock !== null;
+    const recent = playing ? this.visibleNotes(heard) : null;
+    const bolt = this.skyDirector.strike(recent, heard, wall, atmosphere.current.lightning);
+    if (bolt > 0) atmosphere.strike(bolt);
+    if (wall - this.lastMood < 0.5) return;
+    const dt = wall - this.lastMood;
     this.lastMood = wall;
     const windowS = 6;
-    const notes = this.engine.playing || this.captureClock ? this.visibleNotes(heard).filter((n) => n.time <= heard && n.time > heard - windowS) : [];
-    const w = this.pinnedWeather ?? moodWeather({ scale: this.store.scene.settings.scale, bpm: this.store.scene.settings.bpm, notes, windowS });
-    this.renderer.atmosphere.setWeather(w, this.pinnedWeather !== null);
-    this.weatherLabel = weatherName(w);
+    const notes = recent ? recent.filter((n) => n.time <= heard && n.time > heard - windowS) : [];
+    const { scale, bpm } = this.store.scene.settings;
+    const w = this.pinnedWeather ?? this.skyDirector.weather({ scale, bpm, notes, windowS }, dt);
+    atmosphere.setWeather(w, this.pinnedWeather !== null);
+    this.weatherLabel = this.renderer.simple ? 'simple' : weatherName(w);
   }
 
   private updateStats(now: number): void {
@@ -811,40 +1009,123 @@ export class App {
     const dt = now * 1000 - this.frames.t0;
     if (dt < 500) return;
     const fps = (this.frames.count * 1000) / dt;
-    this.renderer.adaptResolution(1000 / fps);
     this.frames = { count: 0, t0: now * 1000 };
     const segs = this.tree?.segments.length ?? 0;
     this.stats.textContent = `sky: ${this.weatherLabel} · ${fps.toFixed(0)} fps · ${segs} rays${this.tree?.truncated ? ' (capped)' : ''}`;
   }
 
-  loadScene(scene: SceneModel, demoId: string | null = null): void {
+  /**
+   * Open a table. `key` is where it is remembered in this browser (a demo id, 'canvas',
+   * 'tutorial'); null keeps nothing (the empty table behind the start screen).
+   */
+  loadScene(scene: SceneModel, demoId: string | null = null, key: string | null = 'canvas'): void {
+    this.snapNow();
     this.demoId = demoId;
+    this.sessionKey = key;
+    if (!demoId) this.originalJson = null;
     this.transport.setScene(demoId);
-    this.store.load(scene);
+    this.store.load(withCardsCut(scene));
+    if (key) {
+      const json = serializeScene(this.store.scene);
+      // A demo left as written is not stored: it is always there.
+      if (json === this.originalJson) this.sessions.setLast(key);
+      else this.sessions.save(key, json);
+    }
+    this.updateHistoryUi();
   }
 
+  /** Open a demo: as the user left it in this browser, or as written. */
   loadDemo(id: string): void {
     const demo = DEMO_SCENES.find((d) => d.id === id);
     if (!demo) return;
-    const scene = parseScene(demo.scene);
-    this.loadScene(this.enginePref === 2 ? toEngine2(scene) : scene, demo.id);
+    this.snapNow();
+    const original = parseScene(demo.scene);
+    this.originalJson = serializeScene(withCardsCut(original));
+    this.loadScene(this.sessions.load(demo.id) ?? original, demo.id, demo.id);
   }
 
-  /**
-   * Switch the table to another engine without changing what it plays: engine-2 cards get
-   * slots cut where their colours cross them now, engine-1 cards get back the pitches that
-   * fall through their slots now. Demos opened afterwards open in the same engine.
-   */
-  setEngine(engine: EngineVersion): void {
-    this.enginePref = engine;
-    const scene = this.store.scene;
-    if (scene.settings.engine === engine) return;
-    const selected = this.store.selectedId;
-    this.loadScene(engine === 2 ? toEngine2(scene) : toEngine1(scene), this.demoId);
-    if (selected) this.store.select(selected);
+  // ------------------------------------------------------------------ history and sessions
+
+  private onHistory(kinds: ReadonlySet<ChangeKind>): void {
+    if (this.capture || kinds.has('restore')) return;
+    if (kinds.has('load')) {
+      this.history.reset(serializeScene(this.store.scene));
+      this.updateHistoryUi();
+      return;
+    }
+    if (kinds.has('drop')) this.snapNow();
+    else if (kinds.has('geometry') || kinds.has('toggle') || kinds.has('settings')) this.snapSoon();
   }
 
-  /** Engine 2: cut the cards that light reaches for the first time (see cutNewCards). */
+  /** Take a snapshot once the edit settles (a drag, a slider) rather than on every step. */
+  private snapSoon(): void {
+    if (this.snapTimer !== null) window.clearTimeout(this.snapTimer);
+    this.snapTimer = window.setTimeout(() => this.snapNow(), 400);
+  }
+
+  private snapNow(): void {
+    if (this.snapTimer !== null) window.clearTimeout(this.snapTimer);
+    this.snapTimer = null;
+    if (this.capture) return;
+    const json = serializeScene(this.store.scene);
+    if (!this.history.record(json)) return;
+    if (this.sessionKey) {
+      if (json === this.originalJson) this.sessions.remove(this.sessionKey);
+      else this.sessions.save(this.sessionKey, json);
+    }
+    this.updateHistoryUi();
+  }
+
+  private updateHistoryUi(): void {
+    this.transport.setHistory(this.history.canUndo, this.history.canRedo, !!this.demoId && this.history.snapshot !== this.originalJson);
+  }
+
+  /** Move the table to another state of itself (undo, redo, restore), keeping it remembered. */
+  private goTo(json: string): void {
+    this.store.restore(parseScene(json));
+    if (this.sessionKey) {
+      if (json === this.originalJson) this.sessions.remove(this.sessionKey);
+      else this.sessions.save(this.sessionKey, json);
+    }
+    this.updateHistoryUi();
+  }
+
+  undo(): void {
+    this.snapNow();
+    const json = this.history.undo();
+    if (json) this.goTo(json);
+  }
+
+  redo(): void {
+    this.snapNow();
+    const json = this.history.redo();
+    if (json) this.goTo(json);
+  }
+
+  /** The open demo back as it was written; one undo brings the user's version back. */
+  restoreOriginal(): void {
+    if (!this.demoId || !this.originalJson) return;
+    this.snapNow();
+    this.history.record(this.originalJson);
+    this.goTo(this.originalJson);
+  }
+
+  /** A fresh, empty canvas. If the user already had one, it can be brought back with undo. */
+  newCanvas(): void {
+    this.tutorial?.close();
+    const prev = this.sessions.load('canvas');
+    this.loadScene(prev ?? starterScene(), null, 'canvas');
+    if (prev && prev.elements.length > 0) {
+      const json = serializeScene(starterScene());
+      this.history.record(json);
+      this.goTo(json);
+    }
+    if (this.overlay) this.dismissOverlay();
+  }
+
+
+
+  /** Cut the cards that light reaches for the first time (see cutNewCards). */
   private cutCards(): void {
     if (cutNewCards(this.store.scene, this.posedBeat).length === 0) return;
     this.dirty.optics = true;
@@ -854,7 +1135,25 @@ export class App {
     if (this.loomEditor.openId) this.loomEditor.refresh();
   }
 
-  /** Engine-2 card: re-cut its slots around the colours crossing it now (see recutLoom). */
+  /**
+   * Rewind (or skip) one card: shift its phase so that its step `step` is the one that
+   * launches next, while the song and every other card go on where they are.
+   */
+  private setCardPhase(id: string, step: number): void {
+    const el = this.store.get(id);
+    if (el?.kind !== 'loom') return;
+    const stepBeats = SUBDIVISION_BEATS[el.subdivision];
+    // Playing: the next step boundary; stopped: the step the song resumes on.
+    const pos = this.engine.position();
+    const next = this.engine.playing ? Math.floor(pos / stepBeats) + 1 : Math.round(pos / stepBeats);
+    const offset = (((next - step) % el.steps) + el.steps) % el.steps;
+    if (offset === (el.offset ?? 0)) return;
+    this.store.updateElement(id, (e) => {
+      if (e.kind === 'loom') e.offset = offset;
+    });
+  }
+
+  /** Cut card: re-cut its slots around the colours crossing it now (see recutLoom). */
   private recutCard(id: string): void {
     const cut = recutLoom(this.store.scene, id).elements.find((e) => e.id === id);
     if (cut?.kind !== 'loom') return;
@@ -876,6 +1175,13 @@ export class App {
     } catch (err) {
       window.alert(`Could not load this scene: ${(err as Error).message}`);
     }
+  }
+
+  /** The song's length in beats: its longest loop (usually a card), at least a bar. */
+  private songBeats(): number {
+    let beats = this.store.scene.settings.beatsPerBar;
+    for (const src of this.sources.values()) beats = Math.max(beats, src.loopBeats);
+    return beats;
   }
 
   /** Length of one full musical loop, in seconds (longest card, else 8 bars), capped. */
@@ -902,16 +1208,46 @@ export class App {
     }
   }
 
+  /** Interface sounds may start only after a user gesture. */
+  private unlockSfx = (): void => this.sfx.sfx.unlock();
+
+  /** A soft click for buttons, pickers and toggles in the panels (the table has its own sounds). */
+  private onUiClick = (e: MouseEvent): void => {
+    const t = e.target as HTMLElement;
+    if (t === this.canvas || !t.closest?.('button, select, input[type="checkbox"], .sl-help')) return;
+    this.sfx.uiClick();
+  };
+
+  /** Sliders tick as they move; pickers click when they change. */
+  private onUiInput = (e: Event): void => {
+    const t = e.target as HTMLInputElement | HTMLSelectElement;
+    if (t instanceof HTMLInputElement && t.type === 'range') {
+      const min = Number(t.min || 0);
+      const max = Number(t.max || 100);
+      this.sfx.uiSlide(max > min ? (Number(t.value) - min) / (max - min) : 0.5);
+    } else if (t instanceof HTMLSelectElement) {
+      this.sfx.uiClick();
+    }
+  };
+
   destroy(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.visible = false;
+    this.snapNow();
     this.unsubscribe();
+    this.unsubscribeHistory();
     this.resizeObserver.disconnect();
     this.intersectionObserver.disconnect();
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.root.removeEventListener('keydown', this.onKey);
     this.root.removeEventListener('pointerdown', this.onAnyPointer, true);
+    this.root.removeEventListener('pointerdown', this.unlockSfx, true);
+    this.root.removeEventListener('keydown', this.unlockSfx, true);
+    this.root.removeEventListener('click', this.onUiClick);
+    this.root.removeEventListener('input', this.onUiInput);
+    this.sfx.dispose();
+    this.sfx.sfx.dispose();
     this.interaction.dispose();
     this.engine.dispose();
     this.pulseTexture.dispose();
@@ -932,6 +1268,25 @@ function loadQuality(): Quality {
   return 'high';
 }
 
+const SIMPLE_KEY = 'spectral-loom:simple';
+
+/** Simple mode (plain sky, no weather) is remembered per browser; off by default. */
+function loadSimple(): boolean {
+  try {
+    return localStorage.getItem(SIMPLE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveSimple(on: boolean): void {
+  try {
+    localStorage.setItem(SIMPLE_KEY, on ? '1' : '0');
+  } catch {
+    // Not persisted; the choice still applies for this visit.
+  }
+}
+
 function saveQuality(q: Quality): void {
   try {
     localStorage.setItem(QUALITY_KEY, q);
@@ -940,14 +1295,24 @@ function saveQuality(q: Quality): void {
   }
 }
 
+/**
+ * `?weather=` pins the sky for screenshots and demos: aurora, rain, snow, mist, storm, gale,
+ * blizzard, sunset, dawn, moon. Anything else is a calm night.
+ */
 function pinnedWeatherFromUrl(): Weather | null {
   const w = new URLSearchParams(location.search).get('weather');
   if (!w) return null;
   const base = { ...CALM_NIGHT, mist: 0.2 };
   if (w === 'aurora') return { ...base, aurora: 1, clouds: 0.05, wind: 0.5, warmth: 0.8 };
-  if (w === 'rain') return { ...base, rain: 1, clouds: 0.85, mist: 0.4, wind: 0.8, warmth: 0.1, fireflies: 0 };
+  if (w === 'rain') return { ...base, rain: 1, clouds: 0.85, mist: 0.4, wind: 0.5, warmth: 0.1, fireflies: 0, waves: 0.25 };
   if (w === 'snow') return { ...base, snow: 1, clouds: 0.5, mist: 0.5, wind: 0.2, warmth: 0.3, fireflies: 0 };
   if (w === 'mist') return { ...base, mist: 1, clouds: 0.3, fireflies: 0.8 };
+  if (w === 'storm') return { ...base, rain: 1, clouds: 1, mist: 0.1, wind: 0.9, warmth: 0.05, fireflies: 0, aurora: 0, waves: 1, lightning: 1 };
+  if (w === 'gale') return { ...base, clouds: 0.6, mist: 0.3, wind: 1, warmth: 0.3, fireflies: 0, aurora: 0, waves: 0.7 };
+  if (w === 'blizzard') return { ...base, snow: 1, clouds: 0.8, mist: 0.4, wind: 0.95, warmth: 0.15, fireflies: 0, aurora: 0, waves: 0.5 };
+  if (w === 'sunset') return { ...base, dusk: 1, warmth: 1, clouds: 0.3, aurora: 0, fireflies: 0.6, mist: 0.15 };
+  if (w === 'dawn') return { ...base, dusk: 0.9, warmth: 0.3, clouds: 0.2, aurora: 0, fireflies: 0.1, mist: 0.45 };
+  if (w === 'moon') return { ...base, dusk: 0, warmth: 0, clouds: 0.05, aurora: 0, fireflies: 0.2 };
   return base;
 }
 

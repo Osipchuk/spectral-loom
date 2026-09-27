@@ -21,14 +21,18 @@ export function parseScene(json: string | unknown): SceneModel {
     throw new Error('Not a Spectral Loom scene (expected version 1 with an elements array).');
   }
   const table = isObject(raw.table) ? { ...DEFAULT_TABLE, ...raw.table } : { ...DEFAULT_TABLE };
-  const settings = { ...DEFAULT_SETTINGS, ...(isObject(raw.settings) ? raw.settings : {}) };
-  settings.engine = settings.engine === 2 ? 2 : 1;
+  const settings: Record<string, unknown> = { ...DEFAULT_SETTINGS, ...(isObject(raw.settings) ? raw.settings : {}) };
+  // Files from the first engine (settings.engine 1) hold cards written in pitches; any slots
+  // they carry are placeholders. Drop them: the cards are cut where they lie when loaded.
+  const pitchCards = settings.engine === 1;
+  delete settings.engine;
   const elements: SceneElement[] = [];
   for (const e of raw.elements) {
     if (!isObject(e) || !KINDS.includes(e.kind as ElementKind) || !isObject(e.pos)) continue;
     const pos = { x: Number(e.pos.x) || 0, y: Number(e.pos.y) || 0 };
     const base = makeElement(e.kind as ElementKind, pos, Number(e.rotation) || 0);
     const el = { ...base, ...e, pos } as SceneElement;
+    if (pitchCards && el.kind === 'loom') delete el.slots;
     if (typeof el.id !== 'string' || elements.some((x) => x.id === el.id)) el.id = base.id;
     elements.push(el);
   }
@@ -36,7 +40,7 @@ export function parseScene(json: string | unknown): SceneModel {
     version: 1,
     name: typeof raw.name === 'string' ? raw.name : 'Untitled',
     table: table as SceneModel['table'],
-    settings: settings as SceneModel['settings'],
+    settings: settings as unknown as SceneModel['settings'],
     elements,
   };
 }

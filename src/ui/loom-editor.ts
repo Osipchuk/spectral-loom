@@ -1,14 +1,14 @@
 import { BEAT_PRESETS, composeBeat, composeMelody, MELODY_PRESETS } from '../music/compose';
 import type { SceneStore } from '../scene/store';
 import type { Loom, LoomNote, Subdivision } from '../scene/types';
-import { SUBDIVISION_BEATS } from '../timing/sources';
+import { cardStepAt, SUBDIVISION_BEATS } from '../timing/sources';
 import { readableRGB } from '../render/spectral-color';
 import { h } from './dom';
 import { helpIcon } from './panels';
 
 /**
- * One row of the card. Engine 1: a pitch (or drum) that reaches a receptor through it, and
- * `deg` is that scale degree. Engine 2: a slot cut through the card, `deg` is the slot index
+ * One row of the card. Not cut yet: a pitch (or drum) that reaches a receptor through it, and
+ * `deg` is that scale degree. Cut: a slot through the card, `deg` is the slot index
  * and `pitch` the degree of the colour falling through it now (none if it is dark).
  */
 export interface LoomRow {
@@ -23,7 +23,7 @@ export interface LoomRows {
   kit: boolean;
   /** False when no receptor hears this card yet (rows are then a generic guess). */
   connected: boolean;
-  /** Engine 2: rows are slots, and the light decides what they play. */
+  /** Rows are slots, and the light decides what they play. */
   slots?: boolean;
 }
 
@@ -56,11 +56,17 @@ export class LoomEditor {
   private dpr = 1;
 
   private recutBtn: HTMLButtonElement;
+  /** Where this card is in its loop; drag to rewind just this card. */
+  private phase: HTMLInputElement;
+  private phaseLabel: HTMLElement;
+  private phaseDragging = false;
 
   constructor(
     private store: SceneStore,
     private rowsFor: (loomId: string) => LoomRows,
     onRecut: (loomId: string) => void,
+    /** Move this card so that its step `step` plays now (the other cards keep their place). */
+    onPhase: (loomId: string, step: number) => void,
   ) {
     this.title = h('span.sl-le-title');
     this.stepsSel = h('select.sl-le-select', { 'aria-label': 'Steps' });
@@ -95,6 +101,17 @@ export class LoomEditor {
     this.recutBtn.addEventListener('click', () => {
       if (this.loomId) onRecut(this.loomId);
     });
+    const top = h('button.sl-btn', { type: 'button', text: '⏮ From the top', title: 'Start this card again from its first step, now (the others play on)' });
+    top.addEventListener('click', () => {
+      if (this.loomId) onPhase(this.loomId, 0);
+    });
+    this.phase = h('input.sl-range.sl-le-phase', { type: 'range', min: 0, max: 15, step: 1, value: 0, 'aria-label': 'Card position', title: 'Where this card is in its loop: drag to rewind or skip ahead just this card' });
+    this.phase.addEventListener('pointerdown', () => (this.phaseDragging = true));
+    this.phase.addEventListener('pointerup', () => (this.phaseDragging = false));
+    this.phase.addEventListener('input', () => {
+      if (this.loomId) onPhase(this.loomId, Number(this.phase.value));
+    });
+    this.phaseLabel = h('span.sl-le-phase-label');
     const clear = h('button.sl-btn', { type: 'button', text: 'Clear' });
     clear.addEventListener('click', () => this.update((l) => (l.notes = [])));
     const close = h('button.sl-btn.sl-btn-quiet', { type: 'button', text: 'Done', 'aria-label': 'Close editor' });
@@ -124,6 +141,7 @@ export class LoomEditor {
         this.presetSel,
         compose,
         this.recutBtn,
+        h('span.sl-le-phase-wrap', {}, top, this.phase, this.phaseLabel),
         clear,
         close,
       ),
@@ -183,7 +201,11 @@ export class LoomEditor {
   setBeat(beat: number | null): void {
     const loom = this.loom;
     if (!loom || this.el.hidden) return;
-    const step = beat === null ? -1 : Math.floor(beat / SUBDIVISION_BEATS[loom.subdivision]) % loom.steps;
+    const step = beat === null ? -1 : Math.floor(cardStepAt(loom, beat));
+    this.phase.max = String(loom.steps - 1);
+    if (!this.phaseDragging && step >= 0 && this.phase.value !== String(step)) this.phase.value = String(step);
+    const label = step < 0 ? '' : `step ${step + 1} / ${loom.steps}`;
+    if (this.phaseLabel.textContent !== label) this.phaseLabel.textContent = label;
     if (step !== this.playStep) {
       this.playStep = step;
       this.draw();

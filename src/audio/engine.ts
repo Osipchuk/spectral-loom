@@ -16,6 +16,13 @@ const LOOKAHEAD_S = 0.8;
 /** Notes up to this late (main thread was stalled) still play, a hair late, instead of vanishing. */
 const LATE_TOLERANCE_S = 0.12;
 const TICK_S = 0.04;
+/**
+ * How long a synth voice may sit silent before it is disposed. Light that comes round again
+ * (a lens spinning once every few bars) finds its voices still there: building them anew
+ * each time wires dozens of nodes into the running graph, which is what makes audio crackle.
+ * The shared voice budget still caps how many are kept.
+ */
+const IDLE_VOICE_S = 20;
 
 /** A note as scheduled on the audio clock; kept briefly so visuals can react to it. */
 export interface ScheduledNote extends NoteEvent {
@@ -32,6 +39,17 @@ interface Bus {
 interface NotePlace {
   cutoff: number;
   pan: number;
+}
+
+/**
+ * Synth voices alive across every receptor. A table of many receptors (a carousel of nine)
+ * would otherwise build dozens of synths, each a handful of audio nodes, and the audio
+ * thread falls behind: crackle, then silence. At the limit a receptor re-uses its own
+ * voices instead of building new ones.
+ */
+export interface VoiceBudget {
+  live: number;
+  max: number;
 }
 
 /** Anything a receptor can play through: a polyphonic synth or the drum kit. */
@@ -52,7 +70,7 @@ interface Player {
 interface ReceptorVoice {
   instrument: Instrument;
   player: Player;
-  filter: Tone.Filter | null;
+  filter: Tone.BiquadFilter | null;
   panner: Tone.Panner | null;
 }
 
@@ -80,6 +98,9 @@ export class AudioEngine {
   private ctx: Tone.BaseContext | null = null;
   private buses: Record<Instrument, Bus> | null = null;
   private receptorVoices = new Map<string, ReceptorVoice>();
+  /** Synth voices per pitched instrument, shared by its receptors (see VoicePool). */
+  private pools = new Map<Instrument, VoicePool>();
+  private budget: VoiceBudget = { live: 0, max: 22 };
   private nodes: Tone.ToneAudioNode[] = [];
   private master: Tone.Volume | null = null;
   private interval: number | null = null;
@@ -130,7 +151,8 @@ export class AudioEngine {
     const master = new Tone.Volume({ volume: masterDb, context }).connect(context.destination);
     const limiter = new Tone.Limiter({ threshold: -1, context }).connect(master);
     const comp = new Tone.Compressor({ threshold: -18, ratio: 2.5, attack: 0.01, release: 0.25, context }).connect(limiter);
-    const reverb = new Tone.Reverb({ decay: 6.5, preDelay: 0.03, wet: 1, context }).connect(comp);
+    // A long tail is a long convolution on the audio thread: five seconds is plenty.
+    const reverb = new Tone.Reverb({ decay: 5, preDelay: 0.03, wet: 1, context }).connect(comp);
     await reverb.ready;
     const delay = new Tone.PingPongDelay({ delayTime: '8n.', feedback: 0.28, wet: 1, context }).connect(reverb);
     const dry = new Tone.Gain({ gain: 1, context }).connect(comp);
@@ -176,24 +198,44 @@ export class AudioEngine {
     v.panner?.dispose();
   }
 
-  private voiceFor(receptorId: string, instrument: Instrument): ReceptorVoice | null {
+  private voiceFor(receptorId: string, instrument: Instrument, voices: number): ReceptorVoice | null {
     if (!this.buses || !this.ctx) return null;
     const existing = this.receptorVoices.get(receptorId);
     if (existing && existing.instrument === instrument) return existing;
     const context = this.ctx;
-    const player = createPlayer(instrument, context);
     let v: ReceptorVoice;
-    if (player.perNote) {
-      player.output.connect(this.buses[instrument].input);
+    if (instrument !== 'drums') {
+      let pool = this.pools.get(instrument);
+      if (!pool) {
+        pool = new VoicePool(context, () => makeSynth(instrument, context), ENVELOPES[instrument].release, this.budget);
+        pool.output.connect(this.buses[instrument].input);
+        this.pools.set(instrument, pool);
+      }
+      const shared = pool;
+      const max = poolSize(voices);
+      const player: Player = {
+        play: (midi, holdS, time, velocity, place) => shared.play(receptorId, max, midi, holdS, time, velocity, place),
+        release: (time) => shared.release(receptorId, time),
+        output: shared.output,
+        // The voices belong to the pool: tails ring out, and other receptors reuse them.
+        dispose: () => {},
+        perNote: true,
+      };
       v = { instrument, player, filter: null, panner: null };
     } else {
-      const filter = new Tone.Filter({ type: 'lowpass', frequency: cutoffFor(instrument, 0.3), Q: 0.6, rolloff: -12, context });
+      const player = createKit(context);
+      const filter = toneFilter(context, cutoffFor(instrument, 0.3));
       const panner = new Tone.Panner({ pan: 0, context });
       player.output.chain(filter, panner, this.buses[instrument].input);
       v = { instrument, player, filter, panner };
     }
     this.receptorVoices.set(receptorId, v);
     return v;
+  }
+
+  /** Most synth voices alive at once, over all receptors (see VoiceBudget). */
+  setVoiceBudget(max: number): void {
+    this.budget.max = Math.max(4, Math.round(max));
   }
 
   setMasterDb(db: number): void {
@@ -211,11 +253,14 @@ export class AudioEngine {
     this.scheduledUntil = Math.max(this.scheduledUntil, this.clock.beatAt(now));
   }
 
+  /** Where the song stands while stopped: play resumes here (see pause, seek). */
+  private heldBeat = 0;
+
   play(): void {
     if (!this.buses || !this.ctx || this.playing) return;
     const now = this.contextTime() + 0.08;
-    this.clock.anchor(now, Math.ceil(this.clock.beatAt(now)));
-    this.scheduledUntil = this.clock.beatAt(now);
+    this.clock.anchor(now, this.heldBeat);
+    this.scheduledUntil = this.heldBeat;
     this.playing = true;
     this.interval = this.ctx.setInterval(() => this.tick(), TICK_S);
     this.tick();
@@ -227,8 +272,30 @@ export class AudioEngine {
     if (this.interval !== null) this.ctx?.clearInterval(this.interval);
     this.interval = null;
     const now = this.contextTime();
+    // Resume on the next sixteenth after the one being heard.
+    this.heldBeat = Math.ceil(this.clock.beatAt(now) * 4) / 4;
     for (const v of this.receptorVoices.values()) v.player.release(now);
     this.recent = [];
+  }
+
+  /** The song position, in beats: where it plays now, or where it will resume. */
+  position(): number {
+    return this.playing ? this.clock.beatAt(this.heardTime()) : this.heldBeat;
+  }
+
+  /**
+   * Jump the song to `beat` (all cards and rings together). Light already in flight at that
+   * point of the song plays out as it would have, so the jump lands mid-phrase, not on silence.
+   */
+  seek(beat: number): void {
+    const b = Math.max(0, beat);
+    this.heldBeat = b;
+    if (!this.playing || !this.ctx) return;
+    const now = this.contextTime();
+    for (const v of this.receptorVoices.values()) v.player.release(now);
+    this.recent = [];
+    this.clock.anchor(now + 0.05, b);
+    this.scheduledUntil = b;
   }
 
   private checkStatus(): void {
@@ -276,7 +343,7 @@ export class AudioEngine {
       if (time < now - LATE_TOLERANCE_S) continue;
       time = Math.max(time, now + 0.005);
       const holdS = holdSeconds(e.instrument, e.lenBeats * this.clock.secondsPerBeat);
-      const v = this.voiceFor(e.receptorId, e.instrument);
+      const v = this.voiceFor(e.receptorId, e.instrument, e.voices);
       if (!v) continue;
       try {
         if (v.filter && v.panner) {
@@ -328,6 +395,8 @@ export class AudioEngine {
     this.pause();
     for (const v of this.receptorVoices.values()) this.disposeVoice(v);
     this.receptorVoices.clear();
+    for (const pool of this.pools.values()) pool.dispose();
+    this.pools.clear();
     for (const n of this.nodes) n.dispose();
     this.nodes = [];
     this.buses = null;
@@ -347,71 +416,99 @@ type MonoVoice = Tone.Synth | Tone.MonoSynth | Tone.FMSynth;
 /** One pooled voice: a synth with its own tone filter and stereo position. */
 interface PoolVoice {
   synth: MonoVoice;
-  filter: Tone.Filter;
+  filter: Tone.BiquadFilter;
   panner: Tone.Panner;
   busyUntil: number;
   lastStart: number;
+  /** The receptor whose note it plays (or last played). */
+  owner: string;
 }
 
-class VoicePool implements Player {
+/**
+ * The synth voices of one instrument, shared by every receptor that plays it. Each voice has
+ * its own tone filter and panner, set for every note, so a voice one receptor has finished
+ * with can play the next note of any other. Light sweeping from receptor to receptor (a
+ * spinning lens) then reuses voices, instead of each receptor building synths when lit and
+ * dropping them a few seconds later: every build wires a few dozen nodes into the running
+ * audio graph, and dozens of those a minute made the audio crackle and drop out.
+ * A receptor still sounds at most its own polyphony at once; beyond that it steals its own
+ * voice that frees up soonest, never another receptor's.
+ */
+class VoicePool {
   readonly output: Tone.Gain;
-  readonly perNote = true;
   private voices: PoolVoice[] = [];
   private gc: number;
 
   /**
-   * Voices are created only when a note needs one (up to `max`) and disposed after sitting
-   * idle: every Tone synth keeps several audio nodes running even when silent, so a pool
-   * of pre-built voices per receptor would overload the audio thread (crackle, slow-down).
+   * Voices are created only when a note needs one and disposed after sitting idle: every
+   * Tone synth keeps several audio nodes running even when silent, so pre-built voices would
+   * overload the audio thread (crackle, slow-down).
    */
   constructor(
     private context: Tone.BaseContext,
-    private max: number,
     private make: () => MonoVoice,
     private releaseS: number,
+    private budget: VoiceBudget,
   ) {
     this.output = new Tone.Gain({ gain: 1, context });
     this.gc = context.setInterval(() => this.collect(), 2);
   }
 
-  play(midi: number, holdS: number, time: number, velocity: number, place: NotePlace): void {
+  /** Play a note for receptor `owner`, which may sound up to `max` voices at once. */
+  play(owner: string, max: number, midi: number, holdS: number, time: number, velocity: number, place: NotePlace): void {
     // Only voices whose last attack is strictly earlier can take this note (Tone requires
     // monotonic start times per source).
     const usable = this.voices.filter((v) => v.lastStart < time - 0.001);
-    let v = usable.find((x) => x.busyUntil <= time);
-    if (!v && this.voices.length < this.max) {
-      const synth = this.make();
-      const filter = new Tone.Filter({ type: 'lowpass', frequency: place.cutoff, Q: 0.6, rolloff: -12, context: this.context });
-      const panner = new Tone.Panner({ pan: place.pan, context: this.context });
-      synth.chain(filter, panner, this.output);
-      v = { synth, filter, panner, busyUntil: 0, lastStart: -Infinity };
-      this.voices.push(v);
+    const sounding = this.voices.filter((v) => v.owner === owner && v.busyUntil > time).length;
+    let v: PoolVoice | undefined;
+    if (sounding < max) {
+      v = usable.find((x) => x.busyUntil <= time);
+      // A new voice only within the shared budget; a receptor with none sounding always gets one.
+      if (!v && (this.budget.live < this.budget.max || sounding === 0)) v = this.add(place);
     }
-    // All busy: steal the one that frees up soonest.
-    v ??= usable.length ? usable.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b)) : undefined;
+    // All of its voices busy: the receptor steals its own that frees up soonest.
+    if (!v) {
+      const own = usable.filter((x) => x.owner === owner);
+      v = own.length ? own.reduce((a, b) => (a.busyUntil <= b.busyUntil ? a : b)) : undefined;
+    }
     if (!v) return;
-    // Glide tone and position into place just before the attack (a stolen voice may still
-    // be ringing elsewhere; a short glide avoids a click).
+    // Glide tone and position into place just before the attack (a reused or stolen voice
+    // may sit elsewhere; a short glide avoids a click).
     const at = Math.max(this.context.rawContext.currentTime, time - 0.012);
     v.filter.frequency.setTargetAtTime(place.cutoff, at, 0.004);
     v.panner.pan.setTargetAtTime(place.pan, at, 0.004);
     v.synth.triggerAttackRelease(midiToFrequency(midi), holdS, time, velocity);
     v.busyUntil = time + holdS + this.releaseS + 0.05;
     v.lastStart = time;
+    v.owner = owner;
+  }
+
+  private add(place: NotePlace): PoolVoice {
+    this.budget.live += 1;
+    const synth = this.make();
+    const filter = toneFilter(this.context, place.cutoff);
+    const panner = new Tone.Panner({ pan: place.pan, context: this.context });
+    synth.chain(filter, panner, this.output);
+    const v: PoolVoice = { synth, filter, panner, busyUntil: 0, lastStart: -Infinity, owner: '' };
+    this.voices.push(v);
+    return v;
   }
 
   /** Dispose voices that have been silent for a while (keep one warm). */
   private collect(): void {
     const now = this.context.rawContext.currentTime;
-    const idle = this.voices.filter((v) => v.busyUntil < now - 3);
+    const idle = this.voices.filter((v) => v.busyUntil < now - IDLE_VOICE_S);
     for (const v of idle.slice(0, Math.max(0, idle.length - 1))) {
       disposePoolVoice(v);
+      this.budget.live -= 1;
       this.voices.splice(this.voices.indexOf(v), 1);
     }
   }
 
-  release(time: number): void {
+  /** Release the notes of one receptor (pause, seek). */
+  release(owner: string, time: number): void {
     for (const v of this.voices) {
+      if (v.owner !== owner) continue;
       if (v.busyUntil > time) v.synth.triggerRelease(time);
       v.busyUntil = Math.min(v.busyUntil, time + this.releaseS);
     }
@@ -420,9 +517,20 @@ class VoicePool implements Player {
   dispose(): void {
     this.context.clearInterval(this.gc);
     for (const v of this.voices) disposePoolVoice(v);
+    this.budget.live -= this.voices.length;
     this.voices = [];
     this.output.dispose();
   }
+}
+
+/**
+ * A voice's tone filter: one low-pass biquad. Tone.BiquadFilter is the plain native node;
+ * Tone.Filter (the same single biquad at −12 dB) drives its frequency, Q, gain and detune from
+ * always-running signal nodes, which makes the browser recompute the filter for every sample
+ * of every voice, silent or not. With dozens of voices that alone overloads the audio thread.
+ */
+function toneFilter(context: Tone.BaseContext, frequency: number): Tone.BiquadFilter {
+  return new Tone.BiquadFilter({ type: 'lowpass', frequency, Q: 0.6, context });
 }
 
 function disposePoolVoice(v: PoolVoice): void {
@@ -431,54 +539,49 @@ function disposePoolVoice(v: PoolVoice): void {
   v.panner.dispose();
 }
 
-function createPlayer(instrument: Instrument, context: Tone.BaseContext): Player {
-  if (instrument === 'drums') {
-    const kit = new DrumKit(context);
-    return {
-      play: (midi, _hold, time, velocity) => kit.hit(midi - DRUM_BASE_MIDI, time, velocity),
-      release: () => {},
-      output: kit.output,
-      dispose: () => kit.dispose(),
-      perNote: false,
-    };
-  }
+/**
+ * Synth voices a receptor may keep: enough for its chords to ring into each other, no more.
+ * Every voice is a synth plus its own filter and panner running on the audio thread, and a
+ * table of many receptors (a carousel of nine) would otherwise build dozens of them.
+ */
+function poolSize(voices: number): number {
+  return Math.max(2, Math.min(8, Math.round(voices) * 2));
+}
+
+/** The drum kit a drum receptor plays through (one per receptor: it has its own tone and position). */
+function createKit(context: Tone.BaseContext): Player {
+  const kit = new DrumKit(context);
+  return {
+    play: (midi, _hold, time, velocity) => kit.hit(midi - DRUM_BASE_MIDI, time, velocity),
+    release: () => {},
+    output: kit.output,
+    dispose: () => kit.dispose(),
+    perNote: false,
+  };
+}
+
+/** A new synth voice of a pitched instrument. */
+function makeSynth(instrument: Exclude<Instrument, 'drums'>, context: Tone.BaseContext): MonoVoice {
   const env = ENVELOPES[instrument];
   if (instrument === 'pad') {
-    return new VoicePool(
-      context,
-      8,
-      () => new Tone.Synth({ context, oscillator: { type: 'fatsawtooth', count: 3, spread: 22 }, envelope: { ...env } }),
-      env.release,
-    );
+    return new Tone.Synth({ context, oscillator: { type: 'fatsawtooth', count: 2, spread: 24 }, envelope: { ...env } });
   }
   if (instrument === 'pluck') {
-    return new VoicePool(
+    return new Tone.MonoSynth({
       context,
-      8,
-      () =>
-        new Tone.MonoSynth({
-          context,
-          oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
-          envelope: { ...env },
-          filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
-          filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
-        }),
-      env.release,
-    );
+      oscillator: { type: 'fatsawtooth', count: 2, spread: 8 },
+      envelope: { ...env },
+      filter: { type: 'lowpass', Q: 1.5, rolloff: -24 },
+      filterEnvelope: { attack: 0.002, decay: 0.28, sustain: 0.0, release: 0.3, baseFrequency: 280, octaves: 4.2 },
+    });
   }
-  return new VoicePool(
+  return new Tone.FMSynth({
     context,
-    8,
-    () =>
-      new Tone.FMSynth({
-        context,
-        harmonicity: 3.01,
-        modulationIndex: 11,
-        oscillator: { type: 'sine' },
-        modulation: { type: 'sine' },
-        envelope: { ...env },
-        modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
-      }),
-    env.release,
-  );
+    harmonicity: 3.01,
+    modulationIndex: 11,
+    oscillator: { type: 'sine' },
+    modulation: { type: 'sine' },
+    envelope: { ...env },
+    modulationEnvelope: { attack: 0.002, decay: 0.9, sustain: 0, release: 0.8 },
+  });
 }

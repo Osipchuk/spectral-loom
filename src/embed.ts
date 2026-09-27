@@ -1,17 +1,15 @@
 import { App } from './app';
 import { LIGHT_CHANGES_MUSIC } from './capture/timeline';
+import { LIGHT_PLAYS } from './capture/film';
 import { DEMO_SCENES } from './scene/demos';
 import { parseScene } from './scene/serialize';
-import { toEngine2 } from './scene/engine2';
-import type { EngineVersion, SceneModel } from './scene/types';
+import type { SceneModel } from './scene/types';
 import './ui/styles.css';
 
 export interface MountOptions {
   /** Demo to open (see DEMO_SCENES ids), or a full scene. Defaults to the welcome screen. */
   demo?: string;
   scene?: SceneModel | string;
-  /** Engine demos open in: 1 (cards hold notes, default) or 2 (the light picks the notes). */
-  engine?: EngineVersion;
 }
 
 export interface SpectralLoomHandle {
@@ -27,21 +25,20 @@ export interface SpectralLoomHandle {
 export function mount(container: HTMLElement, opts: MountOptions = {}): SpectralLoomHandle {
   const demo = DEMO_SCENES.find((d) => d.id === opts.demo);
   // No scene and no demo: open on an empty table with the welcome screen and tutorial.
-  const engine = opts.engine === 2 ? 2 : 1;
-  const demoScene = (s: SceneModel): SceneModel => (engine === 2 ? toEngine2(s) : s);
   const app = opts.scene
-    ? new App(container, { scene: parseScene(opts.scene), demoId: null, engine })
+    ? new App(container, { scene: parseScene(opts.scene), demoId: null })
     : demo
-      ? new App(container, { scene: demoScene(parseScene(demo.scene)), demoId: demo.id, engine })
-      : new App(container, { engine });
+      ? new App(container, { scene: parseScene(demo.scene), demoId: demo.id })
+      : new App(container, {});
 
   if (new URLSearchParams(location.search).has('debug')) {
     // Test hook for headless checks: render a demo offline and return WAV bytes as base64.
     (window as unknown as Record<string, unknown>).__spectralLoom = {
       app,
-      captureStart: () => app.captureStart(LIGHT_CHANGES_MUSIC),
+      /** `film`: 'light-plays' (the social cut, default) or 'light-changes-music' (the first film). */
+      captureStart: (film = 'light-plays') => app.captureStart(film === 'light-changes-music' ? LIGHT_CHANGES_MUSIC : LIGHT_PLAYS),
       captureFrame: (t: number) => app.captureFrame(t),
-      duration: LIGHT_CHANGES_MUSIC.duration,
+      duration: (film = 'light-plays') => (film === 'light-changes-music' ? LIGHT_CHANGES_MUSIC : LIGHT_PLAYS).duration,
       async captureWav(): Promise<string> {
         const bytes = new Uint8Array(await (await app.captureWav()).arrayBuffer());
         let bin = '';

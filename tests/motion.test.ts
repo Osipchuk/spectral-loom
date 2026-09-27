@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { trace } from '../src/optics/tracer';
 import { DEMO_SCENES } from '../src/scene/demos';
-import { toEngine2 } from '../src/scene/engine2';
 import type { SceneModel } from '../src/scene/types';
 import { notesInWindow, planNotes } from '../src/timing/arrivals';
 import { hasMotion, MOTION_STEP, motionAngle, MovingPlan, poseAt } from '../src/timing/motion';
 import { pulseSources } from '../src/timing/sources';
 
-const ode = (): SceneModel => toEngine2(DEMO_SCENES.find((d) => d.id === 'ode')!.scene);
+const ode = (): SceneModel => structuredClone(DEMO_SCENES.find((d) => d.id === 'ode')!.scene);
 const melody = (s: SceneModel, plan = hasMotion(s) ? new MovingPlan(s) : planNotes(s, trace(s))) =>
   notesInWindow(plan, pulseSources(s), 0, 72)
     .filter((e) => e.receptorId === 'melody-receptor' && e.launchBeat >= 0 && e.launchBeat < 64)
@@ -59,13 +58,12 @@ describe('moving optics', () => {
   });
 });
 
-describe('saving a moving engine-2 table', () => {
-  it('keeps the engine, the slots and the clockwork', async () => {
+describe('saving a moving table', () => {
+  it('keeps the slots and the clockwork', async () => {
     const { parseScene, serializeScene } = await import('../src/scene/serialize');
     const s = ode();
     s.elements.find((e) => e.id === 'melody-prism')!.motion = { kind: 'swing', degrees: 5, bars: 4 };
     const back = parseScene(serializeScene(s));
-    expect(back.settings.engine).toBe(2);
     const loom = back.elements.find((e) => e.id === 'melody-loom');
     expect(loom?.kind === 'loom' && loom.slots).toEqual((s.elements.find((e) => e.id === 'melody-loom') as { slots: unknown }).slots);
     expect(back.elements.find((e) => e.id === 'melody-prism')!.motion).toEqual({ kind: 'swing', degrees: 5, bars: 4 });

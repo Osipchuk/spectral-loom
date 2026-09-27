@@ -1,7 +1,6 @@
 import type { ElementKind, ElementOf, GlobalSettings, SceneElement, SceneModel, Vec2 } from './types';
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
-  engine: 1,
   bpm: 96,
   beatsPerBar: 4,
   scale: 'majorPent',
@@ -31,7 +30,7 @@ export const PARAMS: { [K in ElementKind]: Params<K> } = {
   lens: { aperture: 4, focal: 6 },
   filter: { length: 3, minNm: 480, maxNm: 580 },
   modulator: { steps: 8, hits: 3, rotate: 0, subdivision: '1/8', depth: 0.6 },
-  receptor: { aperture: 3, instrument: 'pluck', octave: 3, span: 2, voices: 4, gain: 0.8 },
+  receptor: { aperture: 3, instrument: 'pluck', octave: 3, span: 2, voices: 6, gain: 0.8 },
   blocker: { length: 2 },
   comb: { length: 3, fringes: 5, phase: 0 },
   chord: { length: 4, progression: 'pop', beatsPerChord: 4, rhythm: '1/4' },

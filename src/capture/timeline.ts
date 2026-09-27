@@ -75,9 +75,13 @@ export const LIGHT_CHANGES_MUSIC: Timeline = {
       snow: 0,
       mist: 0.45 - 0.3 * beat,
       clouds: 0.1,
-      wind: 0.12 + 0.55 * beat,
+      wind: 0.12 + 0.4 * beat,
       fireflies: 0.8 - 0.5 * beat,
       warmth: 0.55 + 0.2 * melody,
+      // The melody brings on a golden dusk; the beat stirs the lake.
+      dusk: 0.1 + 0.45 * melody - 0.2 * beat,
+      waves: 0.02 + 0.25 * beat,
+      lightning: 0,
     };
   },
   camera(t) {

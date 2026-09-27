@@ -4,6 +4,7 @@ import { DEMO_SCENES } from '../src/scene/demos';
 import { parseScene, serializeScene } from '../src/scene/serialize';
 import { notesInWindow, planNotes } from '../src/timing/arrivals';
 import { pulseSources } from '../src/timing/sources';
+import { hasMotion, MovingPlan } from '../src/timing/motion';
 
 describe('classical scores', () => {
   it('Ode to Joy plays the right melody, in order', () => {
@@ -31,12 +32,15 @@ describe('lens', () => {
     const plan = planNotes(scene, trace(scene));
     const focused = plan.filter((t) => t.receptorId === 'arp-receptor');
     const diffuse = plan.filter((t) => t.receptorId === 'bass-receptor');
-    expect(focused[0]!.brightness).toBeGreaterThan(0.5);
-    expect(diffuse[0]!.brightness).toBeLessThan(0.1);
+    const mean = (ts: { brightness: number }[]): number => ts.reduce((a, t) => a + t.brightness, 0) / ts.length;
+    // Each note's own light: gathered to a point it is bright, a slice of a spread rainbow dull.
+    expect(mean(focused)).toBeGreaterThan(0.25);
+    expect(mean(diffuse)).toBeLessThan(0.2);
+    expect(mean(focused)).toBeGreaterThan(mean(diffuse) * 2);
     // Removing the lens makes the arpeggio receptor dull (or lose light entirely).
     const noLens = { ...scene, elements: scene.elements.filter((e) => e.kind !== 'lens') };
     const plain = planNotes(noLens, trace(noLens)).filter((t) => t.receptorId === 'arp-receptor');
-    expect(plain.every((t) => t.brightness < focused[0]!.brightness)).toBe(true);
+    expect(plain.length === 0 || mean(plain) < mean(focused)).toBe(true);
   });
 });
 
@@ -45,7 +49,9 @@ describe('demo scenes', () => {
     describe(demo.title, () => {
       const scene = demo.scene;
       const tree = trace(scene);
-      const plan = planNotes(scene, tree);
+      // Moving optics: every note the scene plays over 8 bars, whatever the pose.
+      const moving = hasMotion(scene) ? new MovingPlan(scene) : null;
+      const plan = moving ? Array.from({ length: 128 }, (_, i) => moving.at(i * 0.25)).flat() : planNotes(scene, tree);
 
       it('round-trips through JSON', () => {
         expect(parseScene(serializeScene(scene))).toEqual(scene);
@@ -67,8 +73,7 @@ describe('demo scenes', () => {
       });
 
       it('produces notes', () => {
-        if (demo.id === 'bench') return;
-        const notes = notesInWindow(plan, pulseSources(scene), 16, 48);
+        const notes = notesInWindow(moving ?? plan, pulseSources(scene), 16, 48);
         expect(notes.length).toBeGreaterThan(8);
       });
     });
