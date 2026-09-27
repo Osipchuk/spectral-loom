@@ -1,0 +1,12 @@
+/* The standalone page around the demo (index.html only; an embed brings its own page).
+   Kept out of index.html so the Content-Security-Policy needs no inline styles. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #020203;
+}
+#app {
+  position: fixed;
+  inset: 0;
+}

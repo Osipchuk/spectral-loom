@@ -1,0 +1,63 @@
+name: Deploy
+
+# Builds the demo and ships dist/ to the Cloudflare Pages project "spectral-loom",
+# served at https://spectral-loom.evgenyosipchuk.com (its own origin, so the blog that
+# frames it stays isolated from it). Same pattern as the blog's deploy workflow.
+#
+# Required secrets (the same two the blog uses):
+#   CLOUDFLARE_API_TOKEN  — token with "Account → Cloudflare Pages → Edit"
+#   CLOUDFLARE_ACCOUNT_ID — Cloudflare account ID
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The security headers and the 404 → blog redirect live in public/ and must ship.
+      - name: Sanity-check dist/
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/_headers
+          test -f dist/404.html
+          grep -q "frame-ancestors" dist/_headers
+          if grep -q "<style" dist/index.html; then
+            echo "FAIL: inline <style> in index.html would be blocked by the CSP."
+            exit 1
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=spectral-loom --branch=main

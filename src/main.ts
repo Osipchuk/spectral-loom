@@ -1,4 +1,5 @@
 import { mount } from './embed';
+import './page.css';
 
 const host = document.getElementById('app');
 const params = new URLSearchParams(location.search);

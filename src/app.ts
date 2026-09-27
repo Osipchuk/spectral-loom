@@ -58,6 +58,8 @@ function withCardsCut(scene: SceneModel): SceneModel {
 
 /** The author's tip jar, linked quietly from the start screen. */
 const COFFEE_URL = 'https://buymeacoffee.com/evgenyosipchuk';
+/** The blog this demo lives in. Opened in the top window, so from inside the blog's iframe it leaves the frame. */
+const BLOG_DEMOS_URL = 'https://evgenyosipchuk.com/demos/';
 
 export interface AppOptions {
   /** Scene to open; omitted → an empty table with the welcome screen. */
@@ -367,7 +369,12 @@ export class App {
         demos,
         empty,
         h('p.sl-overlay-foot', { text: 'Your tables are kept in this browser: close the tab, come back, carry on.' }),
-        h('a.sl-coffee', { href: COFFEE_URL, target: '_blank', rel: 'noopener', text: '☕ Buy me a coffee' }),
+        h(
+          'div.sl-welcome-links',
+          {},
+          h('a.sl-coffee', { href: BLOG_DEMOS_URL, target: '_top', text: 'More demos · evgenyosipchuk.com' }),
+          h('a.sl-coffee', { href: COFFEE_URL, target: '_blank', rel: 'noopener noreferrer', text: '☕ Buy me a coffee' }),
+        ),
       ),
     );
   }

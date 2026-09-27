@@ -102,20 +102,39 @@ Use a machine with a GPU (software rendering takes seconds per frame and a lot o
 
 ## Embed
 
-The build is a self-contained static folder with relative asset paths. Two options:
+The build is a self-contained static folder with relative asset paths. It is deployed to its
+own origin, **https://spectral-loom.evgenyosipchuk.com** (Cloudflare Pages project
+`spectral-loom`, see `.github/workflows/deploy.yml`), and the blog frames it from
+`/demos/spectral-loom/`.
 
-**iframe** (full isolation, recommended for a blog):
+**iframe from its own origin** (what the blog does):
 
 ```html
-<iframe src="/demos/spectral-loom/index.html?demo=canon" loading="lazy"
-        style="width:100%;aspect-ratio:16/9;border:0" allow="autoplay"
+<iframe src="https://spectral-loom.evgenyosipchuk.com/?demo=canon"
+        sandbox="allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-modals"
+        referrerpolicy="strict-origin-when-cross-origin"
         title="Spectral Loom — an optical music instrument"></iframe>
 ```
+
+Why a separate origin: an iframe served from the blog's own domain is *not* isolated — its
+scripts can reach `parent.document`, the blog's cookies and storage. On its own subdomain the
+demo can't touch the blog, and the blog can't be affected by anything the demo loads.
+`allow-same-origin` in the sandbox keeps the demo's *own* origin (for localStorage and
+module scripts); it grants nothing on the blog's origin.
+
+Security in the build (`public/_headers`, served by Cloudflare Pages):
+a strict CSP (same origin only, `blob:` for Tone.js' Worker/AudioWorklet, no inline
+scripts or styles), `frame-ancestors` limited to the blog (and its localhost dev server),
+`nosniff`, a closed Permissions-Policy, COOP/CORP and HSTS. Unknown paths serve `404.html`,
+which sends the visitor to the blog's demos page. Links back to the blog use `target="_top"`,
+so from inside the frame they open in the whole tab. Scene files are validated and clamped on
+load (`src/scene/serialize.ts`), and the `?debug` hook exists only on the dev server.
 
 **module** (same page): `mount(container, { demo: 'ode' })` from `src/embed.ts` returns
 `{ loadDemo, loadScene, destroy }`. All styles are scoped under `.sl-root`; keyboard
 shortcuts only listen while the demo has focus; the wheel is captured only over an element;
-rendering pauses off-screen; `destroy()` releases WebGL and audio.
+rendering pauses off-screen; `destroy()` releases WebGL and audio. This runs with the host
+page's full privileges, so prefer the iframe.
 
 ## Layout
 

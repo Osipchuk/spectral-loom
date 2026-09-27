@@ -31,7 +31,9 @@ export function mount(container: HTMLElement, opts: MountOptions = {}): Spectral
       ? new App(container, { scene: parseScene(demo.scene), demoId: demo.id })
       : new App(container, {});
 
-  if (new URLSearchParams(location.search).has('debug')) {
+  // Dev server only (the film recorder runs against `npm run dev`): the production build
+  // must not hang app internals on the page's window, whoever's page that is.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has('debug')) {
     // Test hook for headless checks: render a demo offline and return WAV bytes as base64.
     (window as unknown as Record<string, unknown>).__spectralLoom = {
       app,
