@@ -27,8 +27,9 @@ describe('visual pulses', () => {
     for (let i = 1; i < pulses.length; i++) expect(pulses[i]!.time - pulses[i - 1]!.time).toBeGreaterThanOrEqual(MIN_VISUAL_GAP_S);
   });
 
-  it('gives loom light one channel per pitch and filters the card pulses by pitch', () => {
-    const scene = DEMO_SCENES.find((d) => d.id === 'ode')!.scene;
+  it('gives light behind a card not cut yet one channel per pitch and filters its pulses by pitch', () => {
+    // A card not cut into slots yet still holds pitches, as the scores are written.
+    const scene = DEMO_SCENES.find((d) => d.id === 'ode')!.authored;
     const tree = trace(scene);
     const plan = planNotes(scene, tree);
     const layout = layoutVisuals(scene, tree, plan, scene.settings.bpm);

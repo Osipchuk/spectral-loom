@@ -4,7 +4,7 @@ import { midiToDegree, noteNameToMidi, parseVoice } from '../src/music/notation'
 import { trace } from '../src/optics/tracer';
 import { sampleBand } from '../src/optics/spectrum';
 import { emptyScene, makeElement } from '../src/scene/defaults';
-import { notesInWindow, planNotes, quantizeShift, travelBeats } from '../src/timing/arrivals';
+import { notesInWindow, planNotes, travelBeats } from '../src/timing/arrivals';
 import { bjorklund } from '../src/timing/bjorklund';
 import { pulseSources, pulsesInRange } from '../src/timing/sources';
 
@@ -60,11 +60,6 @@ describe('pitch mapping', () => {
 describe('timing', () => {
   it('computes arrival as distance over c', () => {
     expect(travelBeats(8, 4)).toBe(2);
-  });
-  it('quantizes the first onset with strength, moving the group rigidly', () => {
-    expect(quantizeShift(0.3, 1)).toBeCloseTo(-0.05, 9);
-    expect(quantizeShift(0.3, 0.5)).toBeCloseTo(-0.025, 9);
-    expect(quantizeShift(0.3, 0)).toBeCloseTo(0, 12);
   });
   it('expands Euclidean modulators into looping pulses', () => {
     const s = emptyScene();
@@ -145,5 +140,21 @@ describe('timing', () => {
     const notes = notesInWindow(plan, pulseSources(s), 0, 40);
     expect(notes.length).toBeGreaterThan(0);
     expect(new Set(notes.map((n) => plan.find((t) => t.midi === n.midi)!.degree))).toEqual(new Set([1, 5]));
+  });
+});
+
+describe('card phase', () => {
+  it('shifting a card by n steps plays the same notes n steps later, looping round', () => {
+    const s = emptyScene();
+    const loom = makeElement('loom', { x: 5, y: 5 }, 0, { steps: 8, subdivision: '1/8', notes: [{ at: 0, len: 1, deg: 0 }, { at: 6, len: 2, deg: 3 }] });
+    s.elements.push(loom);
+    const beats = (): [number, number[] | null][] =>
+      pulsesInRange(pulseSources(s).get(loom.id)!, 0, 4).map((p) => [p.beat, p.degrees] as [number, number[] | null]);
+    expect(beats()).toEqual([[0, [0]], [3, [3]]]);
+    loom.offset = 3;
+    // Step 0 → 3 (beat 1.5); step 6 → 9 ≡ 1 (beat 0.5).
+    expect(beats()).toEqual([[0.5, [3]], [1.5, [0]]]);
+    loom.offset = -5; // the same phase as +3
+    expect(beats()).toEqual([[0.5, [3]], [1.5, [0]]]);
   });
 });

@@ -1,4 +1,4 @@
-import { PROGRESSIONS } from '../music/chords';
+import { isSingleChord, PROGRESSIONS } from '../music/chords';
 import { NOTE_NAMES } from '../music/scales';
 import type { ElementKind, GlobalSettings, SceneElement } from '../scene/types';
 
@@ -210,7 +210,13 @@ export const ELEMENT_FIELDS: Record<ElementKind, Field<SceneElement>[]> = {
   lens: [
     rotation,
     num('aperture', 'Aperture', 1.5, 10, 0.5, cells),
-    num('focal', 'Focal length', -12, 16, 0.5, (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)} u`),
+    {
+      // No 0: a lens of zero focal length would bend light infinitely. The slider skips it.
+      ...num('focal', 'Focal length', -12, 16, 0.5, (v) => `${v === 0 ? '±0.5' : `${v > 0 ? '+' : ''}${v.toFixed(1)}`} u`),
+      set: (el, v) => {
+        if (el.kind === 'lens') el.focal = Number(v) === 0 ? (el.focal < 0 ? 0.5 : -0.5) : Number(v);
+      },
+    },
   ],
   filter: [rotation, num('length', 'Length', 1, 8, 0.5, cells), num('minNm', 'Pass from', 400, 690, 5, nm), num('maxNm', 'Pass to', 410, 700, 5, nm)],
   modulator: [
@@ -242,11 +248,32 @@ export const ELEMENT_FIELDS: Record<ElementKind, Field<SceneElement>[]> = {
   chord: [
     rotation,
     num('length', 'Length', 1, 12, 0.5, cells),
-    sel(
-      'progression',
-      'Chords',
-      PROGRESSIONS.map((p) => [p.id, p.label.startsWith('Canon') ? 'Canon' : p.label.replace(/ /g, '')] as [string, string]),
-    ),
+    {
+      key: 'progression',
+      label: 'Chords',
+      kind: 'select',
+      options: [
+        ...PROGRESSIONS.filter((p) => !p.single).map((p) => [p.id, p.label.startsWith('Canon') ? 'Canon' : p.label.replace(/ /g, '')] as [string, string]),
+        ['one', 'One chord'],
+      ],
+      get: (el) => (el.kind === 'chord' && isSingleChord(el.progression) ? 'one' : String((el as { progression?: string }).progression)),
+      set: (el, v) => {
+        if (el.kind !== 'chord') return;
+        if (v !== 'one') el.progression = String(v);
+        else if (!isSingleChord(el.progression)) el.progression = 'I';
+      },
+    },
+    {
+      key: 'singleChord',
+      label: 'Chord',
+      kind: 'select',
+      options: PROGRESSIONS.filter((p) => p.single).map((p) => [p.id, p.label] as [string, string]),
+      hidden: (el) => el.kind !== 'chord' || !isSingleChord(el.progression),
+      get: (el) => (el.kind === 'chord' ? el.progression : 'I'),
+      set: (el, v) => {
+        if (el.kind === 'chord') el.progression = String(v);
+      },
+    },
     sel('beatsPerChord', 'Each chord', [
       ['2', '½ bar'],
       ['4', '1 bar'],
@@ -409,18 +436,19 @@ const HELP: Record<string, string> = {
   "receptor.instrument": "The sound: a soft pad, a plucked string, a bell, or drums (then colour picks the drum: red kick … violet hi-hat).",
   "receptor.octave": "How low or high the reddest light sounds.",
   "receptor.span": "How many octaves the rainbow is stretched over. More octaves, bigger jumps between neighbouring colours.",
-  "receptor.voices": "The most notes this receptor plays at once; the brightest win.",
+  "receptor.voices": "The most notes this receptor plays at once. When it catches more colours than that, the brightest win and the rest stay silent (their labels stay grey) — the violet end, spread widest by a prism, is usually the first to drop out.",
   "receptor.gain": "Volume of this receptor.",
   "blocker.length": "How long the blocker is. Light that hits it stops, and so do its notes.",
   "loom.length": "How wide the card is across the rainbow.",
   "loom.subdivision": "How long one step of the card is.",
   "loom.depth": "How strongly the card's swells brighten the light.",
   "chord.length": "How wide the glass is across the rainbow.",
-  "chord.progression": "The chord sequence. Roman numerals count steps of the scale: I is home, IV and V lead away, vi is the sad relative. The glass lets through only the colours of the current chord.",
+  "chord.progression": "The chord sequence, or One chord to hold a single chord. Roman numerals count steps of the scale: I is home, IV and V lead away, vi is the sad relative. The glass lets through only the colours of the current chord; they glow on the glass, and the chip above it names the notes.",
+  "chord.singleChord": "Which chord the glass holds. Upper case is major, lower case minor (in a major key).",
   "chord.beatsPerChord": "How long each chord lasts before the glass moves to the next one.",
   "chord.rhythm": "Hold plays each chord once and lets it ring; 1/4 and 1/8 strike it on every beat or half-beat.",
-  "comb.length": "How wide the comb is across the light.",
-  "comb.fringes": "How many bright fringes span the rainbow. Each fringe lets one thin colour through: more fringes, more notes in the chord.",
+  "comb.length": "How wide the comb is across the light; a white beam's strands always fill its whole length.",
+  "comb.fringes": "How many bright fringes span the rainbow. Each fringe lets one thin colour through: more fringes, more notes in the chord. A white beam is split into this many parallel strands across the comb.",
   "comb.phase": "Slides the fringes along the spectrum, so a different set of colours (notes) gets through.",
   "global.bpm": "Tempo: how fast emitters pulse and cards advance.",
   "global.scale": "Which notes the colours map to. Pentatonic never clashes; major and minor give full melodies.",

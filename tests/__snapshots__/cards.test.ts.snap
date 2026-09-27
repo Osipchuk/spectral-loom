@@ -1,0 +1,37 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`cutting the scores into slots keeps what they play > keeps every voice where it was laid out (a shift of a sixteenth fails here) 1`] = `
+{
+  "afterglow ag-bass-receptor ag-bass-loom echo 0": "2.00",
+  "afterglow ag-chords-receptor ag-chords-loom echo 0": "1.75",
+  "afterglow ag-drums-receptor ag-drums-loom echo 0": "2.00",
+  "afterglow ag-melody-receptor ag-melody-loom echo 0": "2.00",
+  "canon ground-receptor ground-loom echo 0": "2.00",
+  "canon violin-receptor violin-loom echo 0": "2.00",
+  "echo dub-bass-receptor dub-bass-loom echo 0": "2.00",
+  "echo dub-floor dub-stab-mod echo 0": "1.50",
+  "echo dub-floor dub-stab-mod echo 2": "5.25",
+  "echo dub-floor dub-stab-mod echo 4": "9.25",
+  "echo dub-floor dub-stab-mod echo 6": "13.00",
+  "echo dub-kit dub-bass-emitter echo 0": "3.25",
+  "echo dub-kit dub-clap-mod echo 0": "2.00",
+  "echo dub-kit dub-hat-mod echo 0": "2.00",
+  "echo dub-kit dub-kick-mod echo 0": "2.00",
+  "echo dub-pad dub-pad-glass echo 0": "2.00",
+  "euclid ek-kit ek-kick-mod echo 0": "5.00",
+  "euclid ek-kit ek-snare-mod echo 0": "5.00",
+  "euclid ek-pad-receptor ek-hat-mod echo 0": "2.75",
+  "euclid ek-pad-receptor ek-pad-loom echo 0": "1.75",
+  "gymnopedie gym-accomp-receptor gym-accomp-loom echo 0": "1.75",
+  "gymnopedie gym-melody-receptor gym-melody-loom echo 3": "10.75",
+  "ode harmony-receptor harmony-loom echo 0": "1.75",
+  "ode melody-receptor melody-loom echo 0": "2.00",
+  "poly r1 m3 echo 0": "5.00",
+  "poly r2 m5 echo 2": "7.00",
+  "poly r3 drone echo 0": "10.50",
+  "prelude arp-receptor arp-loom echo 0": "2.00",
+  "prelude bass-receptor bass-loom echo 0": "2.00",
+  "strum drone-receptor drone echo 1": "10.50",
+  "strum strum-receptor strum-mod echo 0": "4.50",
+}
+`;

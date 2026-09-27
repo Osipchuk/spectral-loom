@@ -6,7 +6,7 @@ export const SUBDIVISION_BEATS: Record<Subdivision, number> = { '1/4': 1, '1/8':
 
 /**
  * One swell launched by a pulse source. `degrees: null` means it carries every pitch;
- * `slots` (engine-2 cards) opens only those slots of the card, whatever colour crosses them.
+ * `slots` (cut cards) opens only those slots of the card, whatever colour crosses them.
  */
 export interface Pulse {
   sourceId: string;
@@ -60,14 +60,16 @@ export function pulseSources(scene: SceneModel): Map<string, PulseSource> {
       const step = SUBDIVISION_BEATS[el.subdivision];
       // Notes starting together become one pulse carrying a chord.
       const byStart = new Map<number, { len: number; degs: number[] }>();
+      const shift = cardOffset(el);
       for (const n of el.notes) {
-        const g = byStart.get(n.at) ?? { len: 0, degs: [] };
+        const at = (((n.at + shift) % el.steps) + el.steps) % el.steps;
+        const g = byStart.get(at) ?? { len: 0, degs: [] };
         g.len = Math.max(g.len, n.len);
         g.degs.push(n.deg);
-        byStart.set(n.at, g);
+        byStart.set(at, g);
       }
-      // Engine 2: rows of a cut card are slots, not pitches.
-      const slotted = scene.settings.engine === 2 && !!el.slots && el.slots.length > 0;
+      // Rows of a cut card are slots, not pitches.
+      const slotted = !!el.slots && el.slots.length > 0;
       const events = [...byStart.entries()]
         .sort((a, b) => a[0] - b[0])
         .map(([at, g]) =>
@@ -79,6 +81,18 @@ export function pulseSources(scene: SceneModel): Map<string, PulseSource> {
     }
   }
   return out;
+}
+
+/** A card's phase in whole steps, within its loop (see Loom.offset). */
+export function cardOffset(loom: { offset?: number; steps: number }): number {
+  const o = Math.round(loom.offset ?? 0);
+  return ((o % loom.steps) + loom.steps) % loom.steps;
+}
+
+/** Which step of a card is launching at `beat`, taking its phase into account (fractional). */
+export function cardStepAt(loom: { offset?: number; steps: number; subdivision: Subdivision }, beat: number): number {
+  const s = beat / SUBDIVISION_BEATS[loom.subdivision] - cardOffset(loom);
+  return ((s % loom.steps) + loom.steps) % loom.steps;
 }
 
 /** Pulses of one source whose launch beat lies in [from, to). */

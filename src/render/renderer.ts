@@ -9,7 +9,7 @@ import type { RayTree } from '../optics/types';
 import type { SceneModel } from '../scene/types';
 import type { VisualLayout } from '../timing/visual';
 import { Atmosphere } from './atmosphere';
-import { Diorama } from './diorama';
+import { Diorama, type DioramaSky } from './diorama';
 import { BeamLayer } from './beams/beam-layer';
 import { createElementView, ElementViews } from './elements/element-views';
 import { Materials } from './elements/materials';
@@ -71,11 +71,29 @@ export type Quality = 'eco' | 'balanced' | 'high';
  * full anti-aliasing) at a slightly lower resolution on high-DPI screens. Eco drops the
  * extra full-scene pass that real glass transmission needs and draws at 30 fps.
  */
-export const QUALITY: Record<Quality, { maxPixelRatio: number; samples: number; shadows: number; transmission: boolean; motes: number; grass: boolean; fps: number }> = {
-  eco: { maxPixelRatio: 1, samples: 2, shadows: 0, transmission: false, motes: 700, grass: true, fps: 30 },
-  balanced: { maxPixelRatio: 1.5, samples: 4, shadows: 1024, transmission: true, motes: 1500, grass: true, fps: 60 },
-  high: { maxPixelRatio: 2, samples: 4, shadows: 2048, transmission: true, motes: 2200, grass: true, fps: 60 },
+export const QUALITY: Record<Quality, { maxPixelRatio: number; samples: number; shadows: number; transmission: boolean; motes: number; grass: boolean; fps: number; motionHz: number; voices: number; particles: number }> = {
+  eco: { maxPixelRatio: 1, samples: 2, shadows: 0, transmission: false, motes: 700, grass: true, fps: 30, motionHz: 12, particles: 0.45, voices: 14 },
+  balanced: { maxPixelRatio: 1.5, samples: 4, shadows: 1024, transmission: true, motes: 1500, grass: true, fps: 60, motionHz: 20, particles: 0.75, voices: 18 },
+  high: { maxPixelRatio: 2, samples: 4, shadows: 2048, transmission: true, motes: 2200, grass: true, fps: 60, motionHz: 30, particles: 1, voices: 26 },
 };
+
+/** Light colours for the weather: moonlight cold or warm by valence, the low sun at dawn or sunset. */
+const LIGHT = {
+  moonCold: new THREE.Color(0.55, 0.65, 1.0),
+  moonWarm: new THREE.Color(1.0, 0.82, 0.58),
+  dawn: new THREE.Color(1.0, 0.7, 0.62),
+  sunset: new THREE.Color(1.0, 0.5, 0.2),
+  dawnSky: new THREE.Color(0.55, 0.6, 0.72),
+  sunsetSky: new THREE.Color(0.8, 0.52, 0.55),
+  flash: new THREE.Color(0.75, 0.8, 1.0),
+  mistFog: new THREE.Color(0.07, 0.08, 0.1),
+};
+/** Key light position: high moon, or low sun from the same side, so shadows grow long at dusk. */
+const KEY_NIGHT = new THREE.Vector3(-18, 30, -10);
+const KEY_DUSK = new THREE.Vector3(-27, 13, -15);
+
+/** Simple mode's backdrop: a neutral dark grey (linear, before tone mapping). */
+const SIMPLE_BACKGROUND = new THREE.Color(0.045, 0.047, 0.052);
 
 export const CAMERA_LIMITS = { azimuth: 0.42, polarMin: 0.42, polarMax: 0.86 };
 
@@ -92,11 +110,14 @@ export class Renderer {
   readonly diorama: Diorama;
   private key: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
-  private sky = { top: new THREE.Color(), horizon: new THREE.Color(), fog: new THREE.Color(), moon: new THREE.Color() };
+  private sky: DioramaSky = { top: new THREE.Color(), horizon: new THREE.Color(), fog: new THREE.Color(), moon: new THREE.Color(), sun: new THREE.Color() };
+  private tmpColor = new THREE.Color();
+  private parallax = new THREE.Vector2();
   readonly angles: CameraAngles = { azimuth: 0, polar: 0.66, zoom: 1, panX: 0, panZ: 0 };
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private finish: ShaderPass;
+  private output = new OutputPass();
   private materials = new Materials();
   private table: Table;
   private envTarget: THREE.WebGLRenderTarget;
@@ -106,6 +127,16 @@ export class Renderer {
   private basePixelRatio = Math.min(window.devicePixelRatio, 1);
   quality: Quality = 'high';
   private pixelRatio = this.basePixelRatio;
+  /** `?fixedres` pins the resolution (screenshots, films). */
+  private fixedRes = new URLSearchParams(location.search).has('fixedres');
+  /**
+   * The shadow map is redrawn only when what casts or shapes shadows changed: element views,
+   * the key light's position, the quality level. Music and weather colours leave it alone.
+   */
+  private shadowsDirty = true;
+  private shadowFrom = new THREE.Vector3(Infinity, 0, 0);
+  /** Simple mode: the table alone on a plain grey background (see setSimple). */
+  simple = false;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -120,6 +151,7 @@ export class Renderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const room = new RoomEnvironment();
@@ -134,7 +166,7 @@ export class Renderer {
     this.scene.add(this.hemi);
     const key = new THREE.DirectionalLight(0xfff1e0, 1.5);
     this.key = key;
-    key.position.set(-18, 30, -10);
+    key.position.copy(KEY_NIGHT);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
     const sc = key.shadow.camera;
@@ -163,7 +195,7 @@ export class Renderer {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.38, 0.3, 0.85);
     this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
+    this.composer.addPass(this.output);
     this.finish = new ShaderPass(FinishShader);
     this.composer.addPass(this.finish);
     this.setQuality(quality);
@@ -175,17 +207,19 @@ export class Renderer {
     this.updateCamera();
   }
 
-  /**
-   * Adaptive resolution: step the pixel ratio down when frames are slow, back up when
-   * there is headroom. Called by the app with a smoothed frame time.
-   */
-  adaptResolution(frameMs: number): void {
-    if (new URLSearchParams(location.search).has('fixedres')) return;
-    let next = this.pixelRatio;
-    // Never render below the display's CSS resolution: a soft image is worse than 45 fps.
-    const floor = Math.min(0.75, this.basePixelRatio);
-    if (frameMs > 24 && this.pixelRatio > floor) next = Math.max(floor, this.pixelRatio - 0.25);
-    else if (frameMs < 13 && this.pixelRatio < this.basePixelRatio) next = Math.min(this.basePixelRatio, this.pixelRatio + 0.25);
+  /** Adaptive resolution may step down (never below the display's CSS resolution). */
+  get canLowerResolution(): boolean {
+    return !this.fixedRes && this.pixelRatio > Math.min(1, this.basePixelRatio);
+  }
+
+  get canRaiseResolution(): boolean {
+    return !this.fixedRes && this.pixelRatio < this.basePixelRatio;
+  }
+
+  /** Adaptive resolution: one step (a quarter of a pixel ratio) down or up. */
+  stepResolution(dir: -1 | 1): void {
+    const floor = Math.min(1, this.basePixelRatio);
+    const next = Math.min(this.basePixelRatio, Math.max(floor, this.pixelRatio + dir * 0.25));
     if (next === this.pixelRatio) return;
     this.pixelRatio = next;
     this.renderer.setPixelRatio(next);
@@ -214,9 +248,11 @@ export class Renderer {
       this.key.shadow.map?.dispose();
       this.key.shadow.map = null;
     }
+    this.shadowsDirty = true;
     this.materials.setTransmission(cfg.transmission);
     this.atmosphere.setMoteCount(cfg.motes);
     this.diorama.setGrass(cfg.grass);
+    this.diorama.setParticleScale(cfg.particles);
     const { x, y } = this.size;
     this.size.set(0, 0);
     this.resize(x, y);
@@ -275,12 +311,27 @@ export class Renderer {
 
   syncScene(scene: SceneModel): void {
     this.views.sync(scene.elements);
+    this.shadowsDirty = true;
+  }
+
+  /**
+   * Simple mode: only the table, its elements and their light, on a plain grey background.
+   * No landscape, lake, sky, weather or dust; the lighting stays still.
+   */
+  setSimple(on: boolean): void {
+    this.simple = on;
+    this.atmosphere.setSimple(on);
+    this.diorama.group.visible = !on;
+    this.scene.background = on ? SIMPLE_BACKGROUND : null;
+    this.shadowsDirty = true;
   }
 
   setTree(tree: RayTree, now: number, crossfade: boolean, visual?: VisualLayout): void {
     this.beams.setTree(tree, now, crossfade, { visual });
-    this.glows.setTree(tree);
-    this.atmosphere.setTree(tree);
+    // Light behind a card or chord glass only exists while it plays: no steady glow from it.
+    const steady = (id: number): boolean => !visual?.segments.get(id)?.gate;
+    this.glows.setTree(tree, steady);
+    this.atmosphere.setTree(tree, steady);
   }
 
   private ghost: THREE.Group | null = null;
@@ -290,6 +341,7 @@ export class Renderer {
 
   /** A translucent "place it here" hint for the tutorial, or null to clear it. */
   setGhost(el: SceneModel['elements'][number] | null): void {
+    this.shadowsDirty = true;
     if (this.ghost) {
       this.scene.remove(this.ghost);
       this.ghostDispose?.();
@@ -324,26 +376,34 @@ export class Renderer {
   private tmpV = new THREE.Vector3();
 
   /**
-   * Light the miniature world from the weather: warm golden moonlight for bright music,
-   * cold blue for dark, dimmer under cloud, tinted green-violet while the aurora is up.
+   * Light the miniature world from the weather: moonlight (cold for dark music, warmer for
+   * bright) at night, a low golden or pink sun at dusk, dimmer under cloud, tinted green-violet
+   * while the aurora is up, and a brief white-blue blaze when lightning strikes.
    */
   private applyWeather(time: number): void {
     const w = this.atmosphere.current;
-    const cold = new THREE.Color(0.55, 0.65, 1.0);
-    const warm = new THREE.Color(1.0, 0.82, 0.58);
-    this.key.color.copy(cold).lerp(warm, w.warmth);
-    this.key.intensity = 1.6 * (1 - 0.55 * w.clouds) * (0.8 + 0.4 * w.warmth);
-    this.hemi.color.setRGB(0.45 + 0.1 * w.warmth, 0.52 + 0.35 * w.aurora * 0.5, 0.75 - 0.2 * w.warmth);
-    this.hemi.intensity = 0.45 + 0.35 * w.aurora + 0.1 * w.snow;
-    this.sky.top.setRGB(0.004, 0.006, 0.02);
-    this.sky.horizon.setRGB(0.03 + 0.03 * w.clouds + 0.02 * w.warmth, 0.045 + 0.03 * w.clouds + 0.05 * w.aurora, 0.09 + 0.02 * w.clouds);
-    this.sky.fog.copy(this.sky.horizon).lerp(new THREE.Color(0.07, 0.08, 0.1), w.mist * 0.6);
-    this.sky.moon.copy(this.key.color).multiplyScalar(1 - 0.7 * w.clouds);
+    const flash = this.atmosphere.flash;
+    const pal = this.atmosphere.palette;
+    const warm = THREE.MathUtils.smoothstep(w.warmth, 0.3, 0.7);
+    const f = Math.min(1, flash);
+    this.tmpColor.lerpColors(LIGHT.dawn, LIGHT.sunset, warm);
+    this.key.color.lerpColors(LIGHT.moonCold, LIGHT.moonWarm, w.warmth).lerp(this.tmpColor, w.dusk).lerp(LIGHT.flash, f);
+    this.key.intensity = (1.6 * (0.8 + 0.4 * w.warmth) * (1 - w.dusk) + 2.6 * w.dusk) * (1 - 0.55 * w.clouds) + 4 * flash;
+    this.key.position.lerpVectors(KEY_NIGHT, KEY_DUSK, w.dusk);
+    this.tmpColor.lerpColors(LIGHT.dawnSky, LIGHT.sunsetSky, warm);
+    this.hemi.color.setRGB(0.45 + 0.1 * w.warmth, 0.52 + 0.35 * w.aurora * 0.5, 0.75 - 0.2 * w.warmth).lerp(this.tmpColor, w.dusk);
+    this.hemi.intensity = 0.45 + 0.35 * w.aurora + 0.1 * w.snow + 0.25 * w.dusk + 1.5 * flash;
+    this.sky.top.copy(pal.top).addScalar(0.06 * flash);
+    this.sky.horizon.copy(pal.horizon).add(this.tmpColor.copy(LIGHT.flash).multiplyScalar(0.25 * flash));
+    // Fog: the horizon colour at night, a dusky rose-violet haze at dusk, grey in mist.
+    this.sky.fog.copy(pal.horizon).lerp(this.tmpColor.copy(pal.horizon).multiplyScalar(0.6).lerp(pal.mid, 0.5), w.dusk).lerp(LIGHT.mistFog, w.mist * 0.6);
+    this.sky.moon.lerpColors(LIGHT.moonCold, LIGHT.moonWarm, w.warmth).multiplyScalar(1 - 0.7 * w.clouds);
+    this.sky.sun.copy(pal.sun);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(this.sky.fog);
-    fog.near = 70 - 40 * w.mist - 20 * w.rain;
-    fog.far = 330 - 150 * w.mist - 100 * w.rain;
-    this.diorama.update(time, w, this.pixelRatio, this.sky);
+    fog.near = 70 - 40 * w.mist - 20 * w.rain - 15 * w.waves;
+    fog.far = 330 - 150 * w.mist - 100 * w.rain - 40 * w.snow * w.wind;
+    if (!this.simple) this.diorama.update(time, w, this.pixelRatio, this.sky, flash);
     // Where the far water meets the sky on screen.
     this.tmpV.set(this.camera.position.x, -1.75, this.camera.position.z - 600).project(this.camera);
     this.atmosphere.setHorizon(this.tmpV.y * 0.5 + 0.5);
@@ -360,9 +420,14 @@ export class Renderer {
       ring.scale.setScalar(1 + 0.06 * k);
     }
     this.beams.update(time, now);
-    this.atmosphere.update(time, this.pixelRatio, this.energy, this.size.x / Math.max(1, this.size.y), new THREE.Vector2(this.angles.azimuth, this.angles.polar - 0.66));
+    this.atmosphere.update(time, this.pixelRatio, this.energy, this.size.x / Math.max(1, this.size.y), this.parallax.set(this.angles.azimuth, this.angles.polar - 0.66));
     this.applyWeather(time);
     this.finish.uniforms.uTime!.value = time;
+    if (this.shadowsDirty || !this.shadowFrom.equals(this.key.position)) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowFrom.copy(this.key.position);
+      this.shadowsDirty = false;
+    }
     this.composer.render();
   }
 
@@ -379,6 +444,8 @@ export class Renderer {
     this.envTarget.dispose();
     this.composer.dispose();
     this.bloom.dispose();
+    this.output.dispose();
+    this.finish.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
   }

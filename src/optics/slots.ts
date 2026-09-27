@@ -1,7 +1,7 @@
 import type { Loom, LoomSlot, Vec2 } from '../scene/types';
 import { dot, fromAngle, perp, sub } from './vec2';
 
-/** Slots on an engine-2 card that has none of its own. */
+/** Default slots, for a card that has none of its own. */
 export const DEFAULT_SLOT_COUNT = 12;
 /** Card left standing between two default slots, as a fraction of one slot pitch. */
 const DEFAULT_SLOT_GAP = 0.12;
@@ -20,8 +20,8 @@ export function defaultSlots(count = DEFAULT_SLOT_COUNT): LoomSlot[] {
 }
 
 /**
- * Engine 2: whether a card has been cut. A card is cut the first time it is dropped into
- * light; until then its rows are pitches, as on an engine-1 card, so a new card plays its
+ * Whether a card has been cut. A card is cut the first time it is dropped into light;
+ * until then its rows are pitches, so a new card plays its
  * notes straight away and keeps playing them once cut.
  */
 export function isCut(loom: Pick<Loom, 'slots'>): boolean {

@@ -41,7 +41,8 @@ function fieldRow<T>(field: Field<T>, target: T, onChange: (v: FieldValue) => vo
     return h('div.sl-field', {}, h('div.sl-field-head', {}, label, out), input);
   }
   if (field.kind === 'select') {
-    const group = h('div.sl-seg', { role: 'radiogroup', 'aria-label': field.label });
+    // Many options (chord progressions) wrap into a grid instead of squeezing into one row.
+    const group = h(field.options.length > 4 ? 'div.sl-seg.sl-seg-grid' : 'div.sl-seg', { role: 'radiogroup', 'aria-label': field.label });
     for (const [v, text] of field.options) {
       const b = h('button.sl-seg-btn', { type: 'button', text, 'aria-pressed': String(v === value) });
       b.addEventListener('click', () => {

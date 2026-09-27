@@ -91,7 +91,7 @@ export interface Receptor extends BaseElement {
 
 /**
  * One note on a loom card. `deg` is the card's row: a scale degree (0 = root at the
- * receptor's octave) on an engine-1 card, a slot index on an engine-2 card.
+ * receptor's octave) on a card not cut yet, a slot index on a cut card.
  */
 export interface LoomNote {
   at: number;
@@ -99,7 +99,7 @@ export interface LoomNote {
   deg: number;
 }
 
-/** A slot cut through an engine-2 card, from u0 to u1 along it (−0.5…0.5). */
+/** A slot cut through a card, from u0 to u1 along it (−0.5…0.5). */
 export interface LoomSlot {
   u0: number;
   u1: number;
@@ -118,10 +118,16 @@ export interface Loom extends BaseElement {
   depth: number;
   title: string;
   /**
-   * Engine 2: the slots cut through the card. A hole in row k lets through whatever colour
-   * crosses slot k, so the optics decide the pitch. Missing → evenly spaced default slots.
+   * The slots cut through the card. A hole in row k lets through whatever colour crosses
+   * slot k, so the optics decide the pitch. Missing → not cut yet: rows are pitches, and the
+   * card is cut where it lies the first time light reaches it.
    */
   slots?: LoomSlot[];
+  /**
+   * Where the card stands in its loop, in steps: the note punched at step `at` plays at
+   * loop step `at + offset`. Rewinding one card shifts it against the others.
+   */
+  offset?: number;
 }
 
 /**
@@ -160,15 +166,7 @@ export type SceneElement = Emitter | Prism | Mirror | Lens | Filter | Modulator 
 export type ElementKind = SceneElement['kind'];
 export type ElementOf<K extends ElementKind> = Extract<SceneElement, { kind: K }>;
 
-/**
- * 1: loom cards store pitches (the card is the score, light only carries it).
- * 2: loom cards store slots (the card says when, the light says what), soft quantization,
- *    loudness, tone and stereo per note from where and how tightly its light lands.
- */
-export type EngineVersion = 1 | 2;
-
 export interface GlobalSettings {
-  engine: EngineVersion;
   bpm: number;
   beatsPerBar: number;
   scale: ScaleName;

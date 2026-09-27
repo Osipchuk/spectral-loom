@@ -1,20 +1,19 @@
 import { lightToDegree, receptorPitch } from '../music/pitch';
-import { cardU, isCut, loomSlots } from '../optics/slots';
+import { cardU, isCut } from '../optics/slots';
 import { trace } from '../optics/tracer';
 import type { RayTree } from '../optics/types';
 import { fromAngle, madd } from '../optics/vec2';
-import { AUDIO_THRESHOLD, planNotes, type NoteTemplate } from '../timing/arrivals';
+import { AUDIO_THRESHOLD, planNotes, QUANT_GRID_BEATS, type NoteTemplate } from '../timing/arrivals';
 import { poseAt } from '../timing/motion';
 import { cloneScene } from './defaults';
 import type { Loom, LoomNote, LoomSlot, Receptor, SceneModel } from './types';
 
 /*
- * Moving between the two engines without changing the music.
- *
- * Engine 1 cards hold pitches; engine 2 cards hold slots. Converting a card cuts one slot
- * per pitch exactly where that colour crosses the card now, and moves every note from its
- * pitch row to that slot's row. At this geometry the card plays what it played before;
- * move a prism afterwards and different colours fall through the same slots.
+ * Cutting cards. A card is written in pitches (a score, a new card from the palette, an old
+ * scene file) and cut into slots where it lies in the light: one slot per pitch exactly where
+ * that colour crosses the card, every note moved from its pitch row to that slot's row. At
+ * this geometry the card plays what it was written to play; move a prism afterwards and
+ * other colours fall through the same slots.
  */
 
 /** Where a card's light crosses it and which pitch it plays, for light that reaches a receptor. */
@@ -82,12 +81,11 @@ export function cutSlots(scene: SceneModel, tree: RayTree, loom: Loom): { slots:
 }
 
 /**
- * Engine 2: cut every card that is not cut yet and that light reaches, keeping the notes it
+ * Cut every card that is not cut yet and that light reaches, keeping the notes it
  * plays (its rows are still pitches until then), with the glass posed as at `beat`.
  * Mutates the scene; returns the ids of the cards it cut.
  */
 export function cutNewCards(scene: SceneModel, beat = 0): string[] {
-  if (scene.settings.engine !== 2) return [];
   const fresh = scene.elements.filter((e): e is Loom => e.kind === 'loom' && e.enabled && !isCut(e));
   if (fresh.length === 0) return [];
   const posed = poseAt(scene, beat);
@@ -120,7 +118,7 @@ function remap(notes: LoomNote[], row: (deg: number) => number | undefined): Loo
   return out;
 }
 
-/** Engine-1 card → engine-2 card at the current geometry: same notes, now as slots. */
+/** A card written in pitches → a cut card at the current geometry: same notes, now as slots. */
 export function bakeLoom(scene: SceneModel, tree: RayTree, loom: Loom): void {
   const { slots, degrees } = cutSlots(scene, tree, loom);
   if (slots.length === 0) return;
@@ -129,7 +127,7 @@ export function bakeLoom(scene: SceneModel, tree: RayTree, loom: Loom): void {
   loom.notes = remap(loom.notes, (d) => slotOf.get(d));
 }
 
-/** The pitch each slot of an engine-2 card plays now (the most common one), by slot. */
+/** The pitch each slot of a cut card plays now (the most common one), by slot. */
 export function slotPitches(scene: SceneModel, tree: RayTree, loom: Loom): Map<number, number> {
   const votes = new Map<number, Map<number, number>>();
   for (const c of crossings(scene, tree, loom)) {
@@ -143,14 +141,14 @@ export function slotPitches(scene: SceneModel, tree: RayTree, loom: Loom): Map<n
   return out;
 }
 
-/** Engine-2 card → engine-1 card: each slot's row becomes the pitch that falls through it now. */
+/** Cut card → pitches: each slot's row becomes the pitch that falls through it now. */
 export function unbakeLoom(scene: SceneModel, tree: RayTree, loom: Loom): void {
   const pitch = slotPitches(scene, tree, loom);
   loom.notes = remap(loom.notes, (s) => pitch.get(s));
 }
 
 /**
- * Engine-2 card: cut the slots again around the colours that cross it now, one colour per
+ * Cut the slots of a card again around the colours that cross it now, one colour per
  * slot, keeping the notes it plays now (a slot that catches two colours keeps its main one).
  */
 export function recutLoom(scene: SceneModel, loomId: string): SceneModel {
@@ -158,8 +156,9 @@ export function recutLoom(scene: SceneModel, loomId: string): SceneModel {
   const loom = out.elements.find((e): e is Loom => e.id === loomId && e.kind === 'loom');
   if (!loom) return out;
   unbakeLoom(out, trace(out), loom);
-  const v1 = { ...out, settings: { ...out.settings, engine: 1 as const } };
-  bakeLoom(v1, trace(v1), loom);
+  // Uncut, the card lets every colour through as it crosses: cut again around them.
+  loom.slots = undefined;
+  bakeLoom(out, trace(out), loom);
   return out;
 }
 
@@ -177,14 +176,15 @@ function groupOnsets(plan: NoteTemplate[]): Map<string, { receptorId: string; ec
 }
 
 /**
- * Slide each receptor along its axis (a fraction of a cell) so its notes start when they
- * did in `target`. Engine 2 pulls onsets to the grid only softly, so a voice whose light
- * arrived halfway between two sixteenths (which engine 1 rounded) needs its path trimmed
- * to land where it used to. One receptor moves all its groups at once, so it minimises
- * their weighted error; direct light counts most, each echo less.
+ * Slide each receptor along its axis (a fraction of a cell) so its notes start on the grid.
+ * Onsets are pulled to the grid only softly, so a voice whose light arrives halfway between
+ * two sixteenths would stay there; trimming its path lands it on the nearest line. One
+ * receptor moves all its groups at once, so it minimises their weighted error; direct light
+ * counts most, each echo less. Used when a written score is laid out on the table.
  */
-export function alignReceptors(scene: SceneModel, target: ReturnType<typeof groupOnsets>): void {
+export function alignToGrid(scene: SceneModel): void {
   const c = scene.settings.c;
+  const target = new Map([...groupOnsets(planNotes(scene, trace(scene)))].map(([k, g]) => [k, { ...g, onset: Math.round(g.onset / QUANT_GRID_BEATS) * QUANT_GRID_BEATS }]));
   // Only receptors that are audibly off move at all: every nudge also shifts where the
   // light lands on the slit, which can change what a narrow receptor catches.
   let active: Set<string> | null = null;
@@ -215,29 +215,13 @@ export function alignReceptors(scene: SceneModel, target: ReturnType<typeof grou
   }
 }
 
-/** A scene for engine 2 that plays what the engine-1 scene plays. */
-export function toEngine2(scene: SceneModel): SceneModel {
-  if (scene.settings.engine === 2) return cloneScene(scene);
-  const v1 = cloneScene(scene);
-  const tree = trace(v1);
-  const onsets = groupOnsets(planNotes(v1, tree));
+/**
+ * A written score laid out for playing: its cards cut where they lie, its receptors trimmed
+ * so every voice starts on the grid. The input is not changed.
+ */
+export function layOutScore(scene: SceneModel): SceneModel {
   const out = cloneScene(scene);
-  out.settings.engine = 2;
-  for (const el of out.elements) if (el.kind === 'loom') bakeLoom(v1, tree, el);
-  alignReceptors(out, onsets);
-  return out;
-}
-
-/** A scene for engine 1: every card row becomes the pitch that falls through its slot now. */
-export function toEngine1(scene: SceneModel): SceneModel {
-  if (scene.settings.engine !== 2) return cloneScene(scene);
-  const out = cloneScene(scene);
-  const tree = trace(out);
-  for (const el of out.elements) {
-    if (el.kind !== 'loom') continue;
-    unbakeLoom(out, tree, el);
-    el.slots = loomSlots(el);
-  }
-  out.settings.engine = 1;
+  cutNewCards(out);
+  alignToGrid(out);
   return out;
 }

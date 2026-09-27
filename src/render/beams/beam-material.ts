@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PULSES_PER_CHANNEL } from '../../timing/visual';
-import { BASE_WIDTH, MIN_WIDTH } from './beam-geometry';
+import { BASE_WIDTH, MAX_DRAW_WIDTH, MIN_WIDTH } from './beam-geometry';
 
 // Ashima/Stefan Gustavson 3D simplex noise (MIT).
 export const SIMPLEX_GLSL = /* glsl */ `
@@ -36,8 +36,10 @@ attribute vec3 aColor;
 attribute vec4 aParams;
 attribute vec4 aPulse;
 attribute float aEnv;
+attribute float aGate;
 uniform float uMode;
 varying float vEnv;
+varying float vGate;
 varying float vT;
 varying float vOffset;
 varying vec4 vWidth;
@@ -55,7 +57,19 @@ void main() {
     side = normalize(cross(aDir, vec3(0.0, 1.0, 0.0)));
     p.y = 0.004;
   }
-  float extent = aParams.z * (uMode < 0.5 ? 1.0 : 2.2);
+  float extent = aParams.z;
+  if (uMode > 0.5) {
+    // Spill on the table: a Gaussian of radius r (see the fragment shader), at most
+    // 0.15 × intensity at its centre. Past the distance where it falls below 1e-5 it adds
+    // nothing even with dozens of fan rays stacked, so the quad stops there. Wide, faint
+    // fans (a short-focus lens) otherwise cover the table many times over.
+    float len = aParams.y;
+    float w0 = max(${MIN_WIDTH.toFixed(3)}, max(abs(aWidth.x), aWidth.z));
+    float w1 = max(${MIN_WIDTH.toFixed(3)}, max(abs(aWidth.x + aWidth.y * len), aWidth.w));
+    float rMax = 0.35 + min(max(w0, w1), ${MAX_DRAW_WIDTH.toFixed(3)}) * 1.5;
+    float reach = rMax * sqrt(log(max(1.0, aParams.x * 0.15 / 1e-5)));
+    extent = min(aParams.z * 2.2, reach);
+  }
   p += side * aCorner.y * extent;
   vT = aCorner.x;
   vOffset = aCorner.y * extent;
@@ -64,6 +78,7 @@ void main() {
   vParams = aParams;
   vPulse = aPulse;
   vEnv = aEnv;
+  vGate = aGate;
   vWorld = p;
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
 }`;
@@ -80,6 +95,7 @@ uniform sampler2D uPulses;
 uniform sampler2D uNoise;
 uniform vec4 uEnv[5];
 varying float vEnv;
+varying float vGate;
 varying float vT;
 varying float vOffset;
 varying vec4 vWidth;
@@ -134,11 +150,15 @@ void main() {
   float s = vT * len;
   float phys = abs(vWidth.x + vWidth.y * s);
   float fan = mix(vWidth.z, vWidth.w, vT);
-  float w = max(${MIN_WIDTH.toFixed(3)}, max(phys, fan));
-  float radiance = min(vParams.x * ${BASE_WIDTH.toFixed(3)} / w, 7.0);
+  float wTrue = max(${MIN_WIDTH.toFixed(3)}, max(phys, fan));
+  float radiance = min(vParams.x * ${BASE_WIDTH.toFixed(3)} / wTrue, 7.0);
+  // Shape within the capped quad (see MAX_DRAW_WIDTH); brightness from the real width.
+  float w = min(wTrue, ${MAX_DRAW_WIDTH.toFixed(3)});
   float E = swellAt(vPulse.x + s);
-  // Never dark: a base glow plus the swell, base + depth ≤ 1 by construction.
-  float level = uBase + (1.0 - uBase) * E;
+  // Never dark: a base glow plus the swell, base + depth ≤ 1 by construction. Light behind a
+  // card or chord glass passes only while it plays (a faint trace shows its path when paused).
+  float base = uBase * mix(1.0, uPulsesOn > 0.5 ? 0.04 : 0.3, vGate);
+  float level = base + (1.0 - uBase) * E;
 
   // Slow drifting density field (tileable noise texture): light in slightly hazy air.
   vec2 q = vWorld.xz;
@@ -161,7 +181,7 @@ void main() {
   } else {
     float r = 0.35 + w * 1.5;
     float spill = exp(-vOffset * vOffset / (r * r));
-    float energy = vParams.x * level * min(${BASE_WIDTH.toFixed(3)} / max(w, 0.22), 1.0);
+    float energy = vParams.x * level * min(${BASE_WIDTH.toFixed(3)} / max(wTrue, 0.22), 1.0);
     gl_FragColor = vec4(vColor * energy * spill * (0.04 + 0.08 * E) * mix(0.8, 1.1, haze) * uGain, 1.0);
   }
 }`;

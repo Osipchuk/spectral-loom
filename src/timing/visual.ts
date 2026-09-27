@@ -13,8 +13,8 @@ export const MIN_VISUAL_GAP_S = 1 / 3;
 export const PULSES_PER_CHANNEL = 64;
 
 /**
- * A row of the pulse texture: one pulse source, optionally narrowed to one pitch (engine-1
- * cards, chord glass) or to one slot (engine-2 cards).
+ * A row of the pulse texture: one pulse source, optionally narrowed to one pitch (cards not
+ * cut yet, chord glass) or to one slot (cut cards).
  */
 export interface VisualChannel {
   sourceId: string;
@@ -27,6 +27,11 @@ export interface SegmentVisual {
   /** Extra delay in seconds, applied progressively along a receptor's final segment. */
   warp: number;
   env: number;
+  /**
+   * 1 behind a loom card or chord glass: that light exists only while a hole or chord lets
+   * it through, so it has no steady glow of its own, only swells. 0 elsewhere.
+   */
+  gate: number;
 }
 
 export interface VisualLayout {
@@ -89,7 +94,7 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
     const src = byId.get(seg.pulseSourceId);
     let ch: number;
     if (src?.kind === 'loom' && seg.slot !== null) {
-      // Engine-2 card: light behind a slot swells when that slot is open, whatever its colour
+      // Cut card: light behind a slot swells when that slot is open, whatever its colour
       // and whether or not it reaches a receptor; light behind solid card only glows.
       ch = seg.slot < 0 ? -1 : channel(src.id, null, seg.slot);
     } else if (src?.kind === 'loom' || src?.kind === 'chord') {
@@ -100,7 +105,8 @@ export function layoutVisuals(scene: SceneModel, tree: RayTree, plan: NoteTempla
       ch = channel(seg.pulseSourceId, null);
     }
     const inst = instrumentOf.get(seg.id);
-    segments.set(seg.id, { channel: ch, warp: warpOf.get(seg.id) ?? 0, env: inst ? ENV_SLOTS.indexOf(inst) : 0 });
+    const gate = src?.kind === 'loom' || src?.kind === 'chord' ? 1 : 0;
+    segments.set(seg.id, { channel: ch, warp: warpOf.get(seg.id) ?? 0, env: inst ? ENV_SLOTS.indexOf(inst) : 0, gate });
   }
   return { channels, segments };
 }

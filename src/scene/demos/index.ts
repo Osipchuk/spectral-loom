@@ -1,5 +1,7 @@
 import { parseVoice } from '../../music/notation';
+import { degreeToWavelength } from '../../music/pitch';
 import { DEFAULT_SETTINGS, DEFAULT_TABLE, PARAMS } from '../defaults';
+import { layOutScore } from '../cards';
 import type { ElementKind, ElementOf, LoomNote, ScaleName, SceneElement, SceneModel, Subdivision, Vec2 } from '../types';
 
 const rad = (deg: number): number => (deg * Math.PI) / 180;
@@ -73,6 +75,70 @@ function chain(o: ChainOptions): SceneElement[] {
   return out;
 }
 
+/* ------------------------------------------------------------- Optics bench */
+
+/** Centre of the light carousel: the spinning lens. */
+const HUB = { x: 24, y: 14 };
+/** Radius of the ring of stations around it. */
+const RING = 10;
+
+/**
+ * A light carousel. Two spectrometers throw rainbows into a lens of very short focal length
+ * that turns in the middle of the table; it flings the colours out in a wide spray that
+ * sweeps round a ring of stations like a lighthouse. Each station is a colour filter in
+ * front of a receptor with its own voice, so the spray plays whichever it sweeps across.
+ */
+export function lightCarousel(): SceneElement[] {
+  const out: SceneElement[] = [];
+  // Two rainbows aimed at the hub from opposite sides (the fan leaves at heading + FAN_DIR).
+  for (const [id, side] of [['w', 0], ['e', 180]] as const) {
+    const heading = side - FAN_DIR;
+    const probe = chainPoints({ x: 0, y: 0 }, heading).alongFan(BENCH_LENS_AT);
+    const origin = { x: HUB.x - probe[0], y: HUB.y - probe[1] };
+    const { place } = chainPoints(origin, heading);
+    out.push(el('emitter', `bench-${id}-lamp`, origin.x, origin.y, heading, { pulse: '1/4' }));
+    out.push(el('prism', `bench-${id}-prism`, ...place(7, 0), 70 + heading, { size: 4 }));
+  }
+  out.push(el('lens', 'bench-lens', HUB.x, HUB.y, 135, { aperture: 5, focal: 0.5, motion: { kind: 'turn', degPerBar: 30 } }));
+  for (const st of BENCH_STATIONS) {
+    const a = rad(st.at);
+    const face = st.at + 180;
+    const r = { x: HUB.x + Math.cos(a) * RING, y: HUB.y + Math.sin(a) * RING };
+    const inner = { x: HUB.x + Math.cos(a) * (RING - 1.2), y: HUB.y + Math.sin(a) * (RING - 1.2) };
+    if (st.filter) out.push(el('filter', `bench-${st.id}-filter`, inner.x, inner.y, face, { length: 4.2, minNm: st.filter[0], maxNm: st.filter[1] }));
+    if (st.comb) out.push(el('comb', `bench-${st.id}-comb`, inner.x, inner.y, face, { length: 4.2, fringes: st.comb, phase: 0.3 }));
+    out.push(el('receptor', `bench-${st.id}`, r.x, r.y, face, { aperture: 4.5, octave: 4, span: 1, voices: 2, gain: 0.8, ...st.receptor }));
+  }
+  return out;
+}
+
+/** How far along its fan each rainbow meets the lens. */
+const BENCH_LENS_AT = 6;
+
+/**
+ * The stations round the ring, by angle (degrees, 0 = east, counter-clockwise on the table).
+ * The spinning lens throws each colour into its own sectors (the spray is point-symmetric),
+ * so every filter sits where its colour sweeps by; angles near 0° and 180° are left to the
+ * lamps' beams.
+ */
+const BENCH_STATIONS: {
+  id: string;
+  at: number;
+  filter?: [number, number];
+  comb?: number;
+  receptor: Partial<ElementOf<'receptor'>>;
+}[] = [
+  { id: 'green', at: 30, filter: [495, 570], receptor: { instrument: 'bell', octave: 5 } },
+  { id: 'blue', at: 60, filter: [440, 495], receptor: { instrument: 'pad', octave: 3, gain: 0.6 } },
+  { id: 'violet', at: 90, filter: [380, 440], receptor: { instrument: 'drums', octave: 3, gain: 0.7 } },
+  { id: 'red', at: 120, filter: [620, 720], receptor: { instrument: 'drums', octave: 3, gain: 0.9 } },
+  { id: 'amber', at: 150, filter: [570, 620], receptor: { instrument: 'pluck', octave: 3 } },
+  { id: 'comb', at: 210, comb: 6, receptor: { instrument: 'bell', octave: 4, span: 2, voices: 3 } },
+  { id: 'catch', at: 255, receptor: { instrument: 'pluck', octave: 4, span: 2, voices: 3, gain: 0.6 } },
+  { id: 'deep', at: 300, filter: [620, 720], receptor: { instrument: 'pad', octave: 2, gain: 0.7 } },
+  { id: 'gold', at: 330, filter: [570, 620], receptor: { instrument: 'bell', octave: 4 } },
+];
+
 /** Parse several voices into one card, all in the same scale-degree space. */
 export function card(scale: ScaleName, root: number, octave: number, ...voices: string[]): { notes: LoomNote[]; steps: number } {
   let steps = 0;
@@ -139,7 +205,9 @@ function gymnopedie(): SceneElement[] {
     el('loom', 'gym-melody-loom', ...M.alongFan(4), M.fan, { length: 3, subdivision: '1/4', title: 'Gymnopédie — melody', depth: 0.9, ...gymMelody }),
     el('lens', 'gym-lens', ...lensAt, M.fan, { focal: 9, aperture: 5 }),
     ...ribbon.mirrors,
-    el('receptor', 'gym-melody-receptor', ribbon.end.x, ribbon.end.y, ribbon.heading + 180, { aperture: 6.5, instrument: 'bell', octave: 4, span: 2, voices: 2, gain: 0.85 }),
+    // A little past the ribbon's end: the melody's light arrives clearly on the bar line, not
+    // halfway between two sixteenths (where laying out the score could snap it either way).
+    el('receptor', 'gym-melody-receptor', ribbon.end.x + Math.cos(rad(ribbon.heading)) * 0.4, ribbon.end.y + Math.sin(rad(ribbon.heading)) * 0.4, ribbon.heading + 180, { aperture: 6.5, instrument: 'bell', octave: 4, span: 2, voices: 2, gain: 0.85 }),
     ...chain({
       id: 'gym-accomp',
       origin: { x: 3, y: 22 },
@@ -234,12 +302,83 @@ function euclidKit(): SceneElement[] {
   return out;
 }
 
+/* ------------------------------------------------------------- Dub corridor */
+
+/** The stab's colour: E5, the fifth of A minor, on the floor receptor (octave 4, one octave span). */
+const DUB_STAB_NM = degreeToWavelength(4, { scale: 'minor', span: 1 });
+
+const DUB_BASS =
+  'A1:3 -:1 A1:1 -:1 C2:2 | A1:3 -:1 E2:2 A1:2 | D2:3 -:1 D2:1 -:1 F2:2 | D2:3 -:1 A2:2 E2:2 |';
+
+/**
+ * Dub techno: a drum kit of three coloured beams (as in Euclid kit), a pad chord glass, a
+ * bass card, and the echo corridor of mirrors that turns syncopated stabs into dub delays.
+ */
+function dubCorridor(): SceneElement[] {
+  const out: SceneElement[] = [];
+  // Drums, top left: kick on every beat, clap on 2 and 4, hats on the off-beats.
+  const kit: [string, number, number, Partial<ElementOf<'modulator'>>][] = [
+    ['kick', 2.5, 665, { steps: 16, hits: 4, rotate: 0, subdivision: '1/16', depth: 0.95 }],
+    ['clap', 4.5, 560, { steps: 8, hits: 2, rotate: 2, subdivision: '1/8', depth: 0.6 }],
+    ['hat', 6.5, 455, { steps: 16, hits: 4, rotate: 2, subdivision: '1/16', depth: 0.55 }],
+  ];
+  for (const [name, y, nm, mod] of kit) {
+    out.push(el('emitter', `dub-${name}`, 2, y, 0, { pulse: 'drone', spectrum: { kind: 'band', minNm: nm - 12, maxNm: nm + 12 } }));
+    out.push(el('modulator', `dub-${name}-mod`, 5, y, 0, mod));
+  }
+    // Eight cells from the rings: two beats of light, so the kick lands on the beat.
+  out.push(el('receptor', 'dub-kit', 13, 4.5, 180, { aperture: 6, instrument: 'drums', octave: 3, span: 1, voices: 3, gain: 0.9 }));
+  // Bass: a card across its own rainbow.
+  out.push(
+    ...chain({
+      id: 'dub-bass',
+      origin: { x: 2, y: 12 },
+      heading: 0,
+      loom: { at: 4.5, length: 3.2, subdivision: '1/8', title: 'Dub corridor — bass', ...card('minor', 9, 1, DUB_BASS) },
+      // Eight cells behind the card, like the drums: two beats late, on the grid.
+      receptor: { at: 12.5, aperture: 7, instrument: 'pluck', octave: 1, span: 2, voices: 1, gain: 0.85 },
+    }),
+  );
+  // Pad chords: a white drone split by a prism, a chord glass holding Am, then Dm.
+  const pad = chainPoints({ x: 20, y: 13 }, 0);
+  out.push(
+    el('emitter', 'dub-pad-lamp', 20, 13, 0, { pulse: 'drone', intensity: 0.9 }),
+    el('prism', 'dub-pad-prism', ...pad.place(7, 0), 70, { size: 4 }),
+    el('chord', 'dub-pad-glass', ...pad.alongFan(5), pad.fan, { length: 4.5, progression: 'drift', beatsPerChord: 8, rhythm: 'hold' }),
+    el('receptor', 'dub-pad', ...pad.alongFan(13), pad.fan + 180, { aperture: 7, instrument: 'pad', octave: 3, span: 1, voices: 3, gain: 0.5 }),
+  );
+  // The echo corridor along the bottom: syncopated teal stabs, each bounce leaking to the floor.
+  out.push(
+    el('emitter', 'dub-stab', 2.5, 19.5, 58, { pulse: '1/16', spectrum: { kind: 'band', minNm: DUB_STAB_NM - 8, maxNm: DUB_STAB_NM + 8 } }),
+    el('modulator', 'dub-stab-mod', 4, 22, 0, { steps: 16, hits: 3, rotate: 3, subdivision: '1/16', depth: 0.85 }),
+    el('mirror', 'dub-top', 24, 17, 90, { length: 44, reflectance: 0.96 }),
+    el('mirror', 'dub-splitter', 24, 23.5, -90, { length: 44, reflectance: 0.62, splitter: true }),
+    el('receptor', 'dub-floor', 24, 27, -90, { aperture: 44, instrument: 'bell', octave: 4, span: 1, voices: 2, gain: 0.75 }),
+  );
+  return out;
+}
+
 export interface DemoScene {
   id: string;
   title: string;
   subtitle: string;
   blurb: string;
-  scene: SceneModel;
+  /** The scene to play: cards cut into slots where their colours cross them (built on first use). */
+  readonly scene: SceneModel;
+  /** As written: cards hold pitches, not cut yet (how the scores are easiest to author). */
+  authored: SceneModel;
+}
+
+/** A demo as written, played as the light plays it: cards are cut once, on first use. */
+function demo(d: Omit<DemoScene, 'scene'>): DemoScene {
+  let cut: SceneModel | null = null;
+  return {
+    ...d,
+    get scene(): SceneModel {
+      cut ??= layOutScore(d.authored);
+      return cut;
+    },
+  };
 }
 
 function scene(name: string, elements: SceneElement[], settings: Partial<SceneModel['settings']> = {}): SceneModel {
@@ -289,27 +428,28 @@ const PRELUDE_BASS = '[C2 C3]:16 | [C2 D3]:16 | [B1 D3]:16 | [C2 E3]:16 | [A1 E3
 const preludeArp = card('major', 0, 3, PRELUDE);
 const preludeBass = card('major', 0, 1, PRELUDE_BASS);
 
-export const DEMO_SCENES: DemoScene[] = [
+export const DEMO_SCENES: DemoScene[] = (
+  [
   {
     id: 'afterglow',
     title: 'Afterglow',
     subtitle: 'original · with drums',
     blurb: 'Four spectrometers in a diamond: a drum kit (colour picks the drum), bass, chords, and bells that join on the second pass. Select a loom card to rewrite any part.',
-    scene: scene('Afterglow', afterglow(), { bpm: 100, scale: 'major', root: 0, quantize: 1, raysPerSplit: 28 }),
+    authored: scene('Afterglow', afterglow(), { bpm: 100, scale: 'major', root: 0, quantize: 1, raysPerSplit: 28 }),
   },
   {
     id: 'gymnopedie',
     title: 'Gymnopédie No. 1',
     subtitle: 'Erik Satie',
     blurb: 'A lens straightens the melody’s rainbow into a ribbon that folds across the table on four mirrors; the rocking chords strum below.',
-    scene: scene('Gymnopédie No. 1', gymnopedie(), { bpm: 76, beatsPerBar: 3, scale: 'major', root: D, quantize: 1, raysPerSplit: 28 }),
+    authored: scene('Gymnopédie No. 1', gymnopedie(), { bpm: 76, beatsPerBar: 3, scale: 'major', root: D, quantize: 1, raysPerSplit: 28 }),
   },
   {
     id: 'ode',
     title: 'Ode to Joy',
     subtitle: 'Beethoven · Symphony No. 9',
     blurb: 'Two spectrometers facing each other. Punched loom cards pick which colours swell; each colour is a note.',
-    scene: scene(
+    authored: scene(
       'Ode to Joy',
       [
         ...chain({
@@ -335,7 +475,7 @@ export const DEMO_SCENES: DemoScene[] = [
     title: 'Canon in D',
     subtitle: 'Pachelbel',
     blurb: 'The ground bass and its chords strum across a tilted receptor; the violin line rings on a bell.',
-    scene: scene(
+    authored: scene(
       'Canon in D',
       [
         ...chain({
@@ -361,7 +501,7 @@ export const DEMO_SCENES: DemoScene[] = [
     title: 'Prelude in C',
     subtitle: 'J. S. Bach · BWV 846',
     blurb: 'Broken chords walk up the spectrum, red to violet, and a lens gathers them into one white point.',
-    scene: scene(
+    authored: scene(
       'Prelude in C',
       [
         ...chain({
@@ -388,7 +528,7 @@ export const DEMO_SCENES: DemoScene[] = [
     title: 'Prism strum',
     subtitle: 'generative',
     blurb: 'One white pulse per beat. The receptor is tilted across the rainbow, so red arrives before violet: a strum made of path length. Try moving the receptor or changing the speed of light.',
-    scene: scene(
+    authored: scene(
       'Prism strum',
       [
         ...chain({
@@ -408,27 +548,17 @@ export const DEMO_SCENES: DemoScene[] = [
   },
   {
     id: 'echo',
-    title: 'Echo corridor',
-    subtitle: 'generative',
-    blurb: 'A mirror and a beam splitter form a corridor. Every bounce leaks a little light to the receptor below: echoes, each quieter, each later by exactly the extra path.',
-    scene: scene(
-      'Echo corridor',
-      [
-        el('emitter', 'e', 2.5, 12.5, 58, { pulse: '1/4', spectrum: { kind: 'band', minNm: 440, maxNm: 520 } }),
-        el('modulator', 'mod', 4, 15, 0, { steps: 8, hits: 3, subdivision: '1/8', depth: 0.8 }),
-        el('mirror', 'top', 24, 10, 90, { length: 44, reflectance: 0.96 }),
-        el('mirror', 'bottom', 24, 16.5, -90, { length: 44, reflectance: 0.62, splitter: true }),
-        el('receptor', 'floor', 24, 23, -90, { aperture: 44, instrument: 'bell', octave: 4, span: 1, voices: 2, gain: 0.9 }),
-      ],
-      { bpm: 84, scale: 'minorPent', root: 4, quantize: 0.85 },
-    ),
+    title: 'Dub corridor',
+    subtitle: 'generative · electronic',
+    blurb: 'Night-bus dub techno made of light. Three coloured beams, each re-timed by a Euclidean ring, drum four to the floor; a chord glass holds Am and Dm on a pad; a card plays the bass. Below, a mirror and a beam splitter form a corridor: every bounce leaks a little light to the floor, so each stab comes back as a dub echo, quieter and later by exactly the extra path.',
+    authored: scene('Dub corridor', dubCorridor(), { bpm: 118, scale: 'minor', root: 9, quantize: 1 }),
   },
   {
     id: 'poly',
     title: 'Three against five',
     subtitle: 'generative',
     blurb: 'Two Euclidean modulators — 3 in 8 and 5 in 16 — share one white beam through a splitter, then each fan plays its own voice.',
-    scene: scene(
+    authored: scene(
       'Three against five',
       [
         el('emitter', 'e', 2.5, 14, 0, { pulse: '1/16' }),
@@ -451,19 +581,14 @@ export const DEMO_SCENES: DemoScene[] = [
     title: 'Euclid kit',
     subtitle: 'generative · drums',
     blurb: 'Red, green and blue beams, each re-timed by a Euclidean ring (4 in 16, 2 in 8, 11 in 16), hit one drum receptor: red is the kick, green the snare, blue the hats. Change a ring’s hits to change the groove.',
-    scene: scene('Euclid kit', euclidKit(), { bpm: 96, scale: 'minorPent', root: 9, quantize: 1 }),
+    authored: scene('Euclid kit', euclidKit(), { bpm: 96, scale: 'minorPent', root: 9, quantize: 1 }),
   },
   {
     id: 'bench',
     title: 'Optics bench',
-    subtitle: 'sandbox',
-    blurb: 'No music yet: a prism fans white light into a rainbow, a lens folds it back to white, and a second prism turns light around by total internal reflection.',
-    scene: scene('Optics bench', [
-      el('emitter', 'e1', 3, 20, 0),
-      el('prism', 'p1', 10, 20, 70, { size: 4 }),
-      el('lens', 'l1', 22, 11, -39.5, { aperture: 6, focal: 5 }),
-      el('emitter', 'e2', 20, 25, 0, { spectrum: { kind: 'band', minNm: 560, maxNm: 640 } }),
-      el('prism', 'p2', 30, 25, 120, { size: 3.5 }),
-    ]),
+    subtitle: 'sandbox · light carousel',
+    blurb: 'Two rainbows pour into a lens of very short focal length that spins in the middle of the table, flinging colour all round like a lighthouse. A ring of coloured filters, a comb and bare catchers plays whatever the spray sweeps across: drums, bells, pads. Stop the lens (Motion → Still) and turn it by hand.',
+    authored: scene('Optics bench', lightCarousel(), { bpm: 104, scale: 'majorPent', root: 0, quantize: 1, c: 8 }),
   },
-];
+  ] as Omit<DemoScene, 'scene'>[]
+).map(demo);

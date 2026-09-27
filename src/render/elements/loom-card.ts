@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Loom } from '../../scene/types';
-import { SUBDIVISION_BEATS } from '../../timing/sources';
+import { cardStepAt } from '../../timing/sources';
 import { BEAM_HEIGHT } from '../frame';
 
 export const CARD_BOTTOM = 0.08;
@@ -15,6 +15,8 @@ export interface CardSurface {
   alpha: THREE.CanvasTexture;
   alphaCanvas: HTMLCanvasElement;
   alphaCtx: CanvasRenderingContext2D;
+  /** What was drawn last, so an unchanged card (a paused song) is not redrawn every frame. */
+  key: string;
 }
 
 export function createCardSurface(length: number): CardSurface {
@@ -29,22 +31,23 @@ export function createCardSurface(length: number): CardSurface {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const alpha = new THREE.CanvasTexture(alphaCanvas);
-  return { canvas, ctx, texture, alpha, alphaCanvas, alphaCtx };
+  return { canvas, ctx, texture, alpha, alphaCanvas, alphaCtx, key: '' };
 }
 
 /**
  * Draw the punched card like a player-piano roll: time runs downward through the beam
  * line. Holes are placed where the ray of that pitch crosses the card (`degreeU`, −0.5…0.5
- * along the card), so you can see which colour each hole lets through. Engine-2 cards pass
+ * along the card), so you can see which colour each hole lets through. Cut cards pass
  * their slots: `degreeU` then maps each slot to its centre and `rowWidth` to its width.
  */
 export function drawCard(surface: CardSurface, loom: Loom, degreeU: Map<number, number>, beat: number, rowWidth?: Map<number, number>): void {
   const { canvas, ctx, alphaCtx } = surface;
   const W = canvas.width;
   const H = canvas.height;
-  const stepBeats = SUBDIVISION_BEATS[loom.subdivision];
-  const loopBeats = loom.steps * stepBeats;
-  const step = (((beat % loopBeats) + loopBeats) % loopBeats) / stepBeats;
+  const step = cardStepAt(loom, beat);
+  const key = cardKey(loom, degreeU, step, rowWidth);
+  if (key === surface.key) return;
+  surface.key = key;
   const beamY = H - ((BEAM_HEIGHT - CARD_BOTTOM) / CARD_HEIGHT) * H;
   const rowH = beamY / ROWS_VISIBLE_ABOVE;
 
@@ -90,6 +93,16 @@ export function drawCard(surface: CardSurface, loom: Loom, degreeU: Map<number, 
   }
   surface.texture.needsUpdate = true;
   surface.alpha.needsUpdate = true;
+}
+
+function cardKey(loom: Loom, degreeU: Map<number, number>, step: number, rowWidth?: Map<number, number>): string {
+  let k = `${step}|${loom.steps}|`;
+  for (const n of loom.notes) k += `${n.deg},${n.at},${n.len};`;
+  k += '|';
+  for (const [d, u] of degreeU) k += `${d}:${u};`;
+  k += '|';
+  if (rowWidth) for (const [d, w] of rowWidth) k += `${d}:${w};`;
+  return k;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

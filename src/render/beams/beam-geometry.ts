@@ -8,6 +8,11 @@ import { BEAM_HEIGHT, type TableFrame } from '../frame';
 /** Reference width that maps intensity 1 to radiance 1. */
 export const BASE_WIDTH = 0.26;
 export const MIN_WIDTH = 0.05;
+/**
+ * Widest a beam is drawn. A strongly diverging lens spreads light over half the table; its
+ * radiance is tiny by then, and quads that wide (two dozen per fan, additive) stall the GPU.
+ */
+export const MAX_DRAW_WIDTH = 2.5;
 
 /**
  * Neighbour spacing of a dispersed ray at its start and end. Fan rays are drawn at least
@@ -58,6 +63,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
   const params = new Float32Array(n * 4 * 4);
   const pulse = new Float32Array(n * 4 * 4);
   const env = new Float32Array(n * 4);
+  const gate = new Float32Array(n * 4);
   const index = new Uint32Array(n * 6);
 
   segs.forEach((g, i) => {
@@ -66,18 +72,15 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
     const d = b.clone().sub(a).normalize();
     const [sp0, sp1] = spread.get(g.id) ?? [0, 0];
     const fanFill = 1.35;
-    const wMax = Math.max(
-      MIN_WIDTH,
-      Math.abs(g.width),
-      Math.abs(g.width + g.widthRate * g.length),
-      sp0 * fanFill,
-      sp1 * fanFill,
+    const wMax = Math.min(
+      MAX_DRAW_WIDTH,
+      Math.max(MIN_WIDTH, Math.abs(g.width), Math.abs(g.width + g.widthRate * g.length), sp0 * fanFill, sp1 * fanFill),
     );
     // Quad half-extent covers the soft halo. Fan rays overlap their neighbours, so they get
     // a tight quad (the fan as a whole provides the glow) to keep overdraw low.
     const extent = g.group ? wMax * 2.4 + 0.08 : wMax * 2.6 + 0.3;
     const rgb = lightToRGB(g.light);
-    const vis = opts.visual?.segments.get(g.id) ?? { channel: -1, warp: 0, env: 0 };
+    const vis = opts.visual?.segments.get(g.id) ?? { channel: -1, warp: 0, env: 0, gate: 0 };
 
     for (let v = 0; v < 4; v++) {
       const k = i * 4 + v;
@@ -92,6 +95,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
       params.set([g.intensity, g.length, extent, g.audible ? 1 : 0], k * 4);
       pulse.set([g.sStart, g.pulseOriginS, vis.channel, vis.warp], k * 4);
       env[k] = vis.env;
+      gate[k] = vis.gate;
     }
     const o = i * 4;
     index.set([o, o + 1, o + 2, o + 2, o + 1, o + 3], i * 6);
@@ -106,6 +110,7 @@ export function buildBeamGeometry(tree: RayTree, frame: TableFrame, opts: BeamGe
   geo.setAttribute('aParams', new THREE.BufferAttribute(params, 4));
   geo.setAttribute('aPulse', new THREE.BufferAttribute(pulse, 4));
   geo.setAttribute('aEnv', new THREE.BufferAttribute(env, 1));
+  geo.setAttribute('aGate', new THREE.BufferAttribute(gate, 1));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   return geo;
 }

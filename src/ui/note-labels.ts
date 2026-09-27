@@ -31,7 +31,20 @@ export class NoteLabels {
   private items: { label: NoteLabel; node: HTMLElement; world: THREE.Vector3 }[] = [];
   private v = new THREE.Vector3();
 
+  private key = '';
+
   set(labels: NoteLabel[], toWorld: (p: Vec2, y: number) => THREE.Vector3): void {
+    // Moving optics relabel many times a second: keep the nodes when only positions change.
+    const key = labels.map((l) => `${l.receptorId}|${l.midi}|${l.text}`).join(' ');
+    if (key === this.key && this.items.length === labels.length) {
+      labels.forEach((label, i) => {
+        const it = this.items[i]!;
+        it.label = label;
+        it.world.copy(toWorld({ x: label.at.x + label.back.x * 1.1, y: label.at.y + label.back.y * 1.1 }, 0.95));
+      });
+      return;
+    }
+    this.key = key;
     this.el.replaceChildren();
     this.items = labels.map((label) => {
       const node = h('span.sl-note', { text: label.text });

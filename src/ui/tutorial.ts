@@ -16,6 +16,8 @@ export interface TutorialHost {
   relayout(): void;
   /** Let the table settle after a placement: a new loom card is cut to the light it sits in. */
   settle(): void;
+  /** A step is done: a little fanfare. */
+  celebrate?(): void;
 }
 
 /** Drops within this distance of the outline click into place. */
@@ -27,6 +29,20 @@ const TWINKLE =
 
 const ORIGIN = { x: 7, y: 16 };
 const P = chainPoints(ORIGIN, 0);
+/** A second, smaller spectrometer for the drums, in the free corner of the table. */
+const DRUM_ORIGIN = { x: 26, y: 25 };
+const D = chainPoints(DRUM_ORIGIN, 0);
+/** How far the drum receptor starts from the middle of its rainbow: on the red edge, a kick. */
+const DRUM_SLIDE = -1;
+/** How far to slide the drum receptor towards violet (the "Do it for me" amount). */
+export const DRUM_SLIDE_BY = 1.9;
+
+const across = (rotation: number): { x: number; y: number } => ({ x: -Math.sin(rotation), y: Math.cos(rotation) });
+const drumReceptorAt = (): [number, number] => {
+  const [x, y] = D.alongFan(7.5);
+  const a = across(((D.fan + 180) * Math.PI) / 180);
+  return [x + a.x * DRUM_SLIDE, y + a.y * DRUM_SLIDE];
+};
 
 /**
  * Where each tutorial element goes. The receptor is deliberately narrow: it catches only
@@ -40,10 +56,15 @@ export const TARGETS = {
     instrument: 'pluck',
     octave: 4,
     span: 1,
-    voices: 3,
+    voices: 4,
     gain: 0.85,
   }),
   chord: el('chord', 'tut-chord', ...P.alongFan(7.5), P.fan, { length: 4.2, progression: 'pop', beatsPerChord: 4, rhythm: '1/4' }),
+  drumLamp: el('emitter', 'tut-drum-lamp', DRUM_ORIGIN.x, DRUM_ORIGIN.y, 0, { pulse: '1/4' }),
+  drumPrism: el('prism', 'tut-drum-prism', ...D.place(7, 0), 70, { size: 4 }),
+  /** Narrow, on the red edge of the drum rainbow: it catches one colour, the kick. */
+  drums: el('receptor', 'tut-drums', ...drumReceptorAt(), D.fan + 180, { aperture: 0.5, instrument: 'drums', octave: 2, span: 1, voices: 2, gain: 0.9 }),
+  drumRing: el('modulator', 'tut-drum-ring', ...D.place(4.2, 0), 0, { steps: 8, hits: 3, rotate: 0, subdivision: '1/8', depth: 0.8 }),
   loom: el('loom', 'tut-loom', ...P.alongFan(4.5), P.fan, {
     length: 3.4,
     subdivision: '1/4',
@@ -54,6 +75,19 @@ export const TARGETS = {
     slots: undefined,
   }),
 };
+
+/**
+ * From the chord step on, the receptor catches the whole rainbow. It also stands square to
+ * the fan (no longer tilted for a strum), so every colour travels as far and a melody does
+ * not stumble, and half a cell further back, so its notes land on the beat, together with
+ * the drums.
+ */
+export function widenReceptor(e: { aperture: number; pos: { x: number; y: number }; rotation: number }): void {
+  e.aperture = 7;
+  e.rotation = ((P.fan + 180) * Math.PI) / 180;
+  const [x, y] = P.alongFan(12.5);
+  e.pos = { x, y };
+}
 
 /** How far to turn the prism for the "same holes, new notes" step, and the clockwork after it. */
 export const TUTORIAL_TURN_DEG = 4;
@@ -82,6 +116,8 @@ interface Step {
   begin?: (scene: SceneModel, t: Tutorial) => void;
   /** Offer "Put it back" on the result card: these elements return to their places. */
   restore?: TargetKey[];
+  /** Put these on the table when the step opens (things the step talks about, not the task). */
+  setup?: TargetKey[];
 }
 
 const find = (scene: SceneModel, id: string): SceneElement | undefined => scene.elements.find((e) => e.id === id);
@@ -119,14 +155,14 @@ const STEPS: Step[] = [
     done: (s, t) => {
       const r = find(s, t.idOf('receptor'));
       if (!r) return false;
-      const across = { x: -Math.sin(TARGETS.receptor.rotation), y: Math.cos(TARGETS.receptor.rotation) };
+      const a = across(TARGETS.receptor.rotation);
       const d = { x: r.pos.x - TARGETS.receptor.pos.x, y: r.pos.y - TARGETS.receptor.pos.y };
-      return Math.abs(d.x * across.x + d.y * across.y) >= 1.5;
+      return Math.abs(d.x * a.x + d.y * a.y) >= 1.5;
     },
     auto: (store, t) =>
       store.updateElement(t.idOf('receptor'), (e) => {
-        const across = { x: -Math.sin(e.rotation), y: Math.cos(e.rotation) };
-        e.pos = { x: e.pos.x + across.x * 1.8, y: e.pos.y + across.y * 1.8 };
+        const a = across(e.rotation);
+        e.pos = { x: e.pos.x + a.x * 1.8, y: e.pos.y + a.y * 1.8 };
       }),
     restore: ['receptor'],
   },
@@ -135,14 +171,14 @@ const STEPS: Step[] = [
     task:
       'Now let the light play a progression by itself: drop a Chord glass across the rainbow, on the outline (or click the outline). Its setting in the right panel picks the chords.',
     result:
-      'C – G – Am – F. On each chord the glass lets swells through only on the colours of that chord’s notes; its name glows above the glass. (We widened the receptor so it catches the whole rainbow.)',
+      'C – G – Am – F. On each chord the glass lets swells through only on the colours of that chord’s notes; its name glows above the glass. (We widened the receptor so it catches the whole rainbow, and turned it square to the light so every colour arrives on the beat.)',
     place: 'chord',
     after: (host) => {
       // Widen the receptor to the whole rainbow, then switch to a major key (this retraces).
       for (const e of host.store.scene.elements) {
-        if (e.kind === 'receptor') e.aperture = 7;
+        if (e.kind === 'receptor') widenReceptor(e);
       }
-      host.store.updateSettings({ scale: 'major', root: 0, bpm: 100 });
+      host.store.updateSettings({ scale: 'major', root: 0, bpm: 100, quantize: 1 });
     },
   },
   {
@@ -205,6 +241,40 @@ const STEPS: Step[] = [
     auto: (store, t) =>
       store.updateElement(t.idOf('receptor'), (e) => {
         if (e.kind === 'receptor') e.instrument = 'bell';
+      }),
+  },
+  {
+    title: 'Drums',
+    task:
+      'Rhythm next. We put a second lamp and prism in the top-right corner. Drop a Receptor on the outline at the red edge of their rainbow (or click the outline); we set its Voice to Drums.',
+    result:
+      'A kick on every beat. On a Drums receptor colour picks the drum instead of the pitch: red is the kick, then tom, snare, clap, hat, and violet the open hat. This slit is narrow and sits on the red edge, so it catches one colour: the kick.',
+    setup: ['drumLamp', 'drumPrism'],
+    place: 'drums',
+  },
+  {
+    title: 'A groove',
+    task:
+      'A kick on every beat is a metronome. Drop a Modulator (the Euclidean ring) into the drum lamp’s beam, before the prism, on the outline.',
+    result:
+      'Now it grooves: the ring lets through 3 swells in every 8 eighth-notes, spread as evenly as possible (a Euclidean rhythm, the tresillo). Its Steps, Hits and Rotate in the right panel reshape the groove.',
+    place: 'drumRing',
+  },
+  {
+    title: 'Colour picks the drum',
+    task: 'Drag the drum receptor sideways along its rainbow, towards violet — about two cells. Listen to the kick change.',
+    result:
+      'Same rhythm, other drums: the receptor now catches the blue end, so the kick became hi-hats. A wider slit catches several colours and plays several drums at once; a card or chord glass across a drum rainbow plays a whole kit pattern.',
+    done: (s, t) => {
+      const r = find(s, t.idOf('drums'));
+      if (!r) return false;
+      const a = across(TARGETS.drums.rotation);
+      return (r.pos.x - TARGETS.drums.pos.x) * a.x + (r.pos.y - TARGETS.drums.pos.y) * a.y >= 1.5;
+    },
+    auto: (store, t) =>
+      store.updateElement(t.idOf('drums'), (e) => {
+        const a = across(e.rotation);
+        e.pos = { x: e.pos.x + a.x * DRUM_SLIDE_BY, y: e.pos.y + a.y * DRUM_SLIDE_BY };
       }),
   },
 ];
@@ -356,6 +426,7 @@ export class Tutorial {
 
   private complete(): void {
     this.step?.after?.(this.host);
+    this.host.celebrate?.();
     this.phase = 'result';
     this.show();
   }
@@ -374,6 +445,12 @@ export class Tutorial {
   private next(): void {
     this.index += 1;
     this.phase = 'task';
+    for (const key of this.step?.setup ?? []) {
+      if (this.host.store.get(this.idOf(key))) continue;
+      const t = structuredClone(TARGETS[key]);
+      this.host.store.add(t);
+      this.placed.set(key, t.id);
+    }
     this.step?.begin?.(this.host.store.scene, this);
     this.show();
   }

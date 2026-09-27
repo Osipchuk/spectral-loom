@@ -28,7 +28,7 @@ export const ELEMENT_INFO: Record<ElementKind, { light: string; music: string }>
   },
   loom: {
     light: 'A punched card across a rainbow. Its holes let swells through on chosen colours only.',
-    music: 'Plays a written rhythm and melody: each hole opens its row at a step. On V1 a row is a note; on V2 a row is a slot in the card, and the note is whichever colour falls through it — move the glass and the tune changes.',
+    music: 'Plays a written rhythm and melody: each hole opens its row at a step. A row is a slot in the card, and the note is whichever colour falls through it — move the glass and the tune changes.',
   },
   receptor: {
     light: 'Catches light that hits its front slit.',
@@ -39,7 +39,7 @@ export const ELEMENT_INFO: Record<ElementKind, { light: string; music: string }>
     music: 'Harmony without a punch card: pick a progression (C – G – Am – F …) and how long each chord lasts. The name of the current chord glows above the glass.',
   },
   comb: {
-    light: 'An interference comb: light passes only on evenly spaced bright fringes and leaves as thin lines. White light meeting it splits into a few sharp colours, like a diffraction grating.',
+    light: 'An interference comb: it lets a rainbow through only on evenly spaced fringes of the spectrum and straightens what passes into parallel lines of the prism’s own colours. It makes no colours itself: a white beam comes out as parallel white strands spread over the whole comb, one per fringe (the comb’s length sets the width, Fringes how dense). (A real interference filter only picks colours; picking and straightening together is what a grating and a lens do in a spectrograph.)',
     music: 'Turns a smeared cluster of neighbouring notes into a clean chord with space between the notes. More fringes, more notes; phase slides which notes.',
   },
   blocker: {
