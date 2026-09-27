@@ -154,3 +154,8 @@ Music in the demos: Beethoven's *Ode to Joy*, Pachelbel's *Canon in D* and Bach'
 ---
 
 If Spectral Loom made you smile: [☕ buy me a coffee](https://buymeacoffee.com/evgenyosipchuk).
+
+## License
+
+[MIT](LICENSE) © 2026 Evgeny Osipchuk. Third-party libraries keep their own licenses
+(three.js and Tone.js are MIT too).
